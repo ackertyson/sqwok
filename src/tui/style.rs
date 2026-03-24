@@ -97,3 +97,34 @@ pub fn error_color() -> Color {
 pub fn success_color() -> Color {
     color((80, 200, 120), 78)
 }
+#[inline]
+pub fn shortcut_key_color() -> Color {
+    color((180, 220, 140), 149)
+}
+
+// ── Hint bar helper ──────────────────────────────────────────────────────────
+
+/// Build a colorized hint bar `Line` from a slice of (key, label) pairs.
+/// The key symbol is rendered in `shortcut_key_color`, the label in `dim`.
+pub fn hint_line(hints: &[(&str, &str)]) -> ratatui::text::Line<'static> {
+    use ratatui::{
+        style::Style,
+        text::{Line, Span},
+    };
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, (key, label)) in hints.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("  ", Style::default()));
+        }
+        spans.push(Span::styled(
+            key.to_string(),
+            Style::default().fg(shortcut_key_color()),
+        ));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            label.to_string(),
+            Style::default().fg(dim()),
+        ));
+    }
+    Line::from(spans)
+}

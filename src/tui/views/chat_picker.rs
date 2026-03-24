@@ -119,13 +119,20 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
 
     frame.render_stateful_widget(list, chunks[2], &mut app.picker_state);
 
-    let help_text = if has_invitations {
-        "↑↓ navigate  Enter accept/join  I accept invitation  Ctrl-C quit"
+    let help_line = if has_invitations {
+        s::hint_line(&[
+            ("↑↓", "navigate"),
+            ("Enter", "accept/join"),
+            ("I", "accept invitation"),
+            ("Ctrl-C", "quit"),
+        ])
     } else {
-        "↑↓ navigate  Enter join  Ctrl-C quit"
+        s::hint_line(&[
+            ("↑↓", "navigate"),
+            ("Enter", "join"),
+            ("Ctrl-C", "quit"),
+        ])
     };
-    let help = Paragraph::new(help_text)
-        .style(Style::default().fg(s::dim()))
-        .alignment(Alignment::Center);
+    let help = Paragraph::new(help_line).alignment(Alignment::Center);
     frame.render_widget(help, chunks[3]);
 }

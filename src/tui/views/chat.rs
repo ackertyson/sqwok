@@ -22,9 +22,19 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
         ])
         .split(area);
 
-    // Topic bar
-    let topic = app.current_chat.as_deref().unwrap_or("(no chat)");
-    let keys_indicator = if app.has_keys { "[enc]" } else { "[no keys]" };
+    // Topic bar — look up friendly name from chat_list, fall back to uuid
+    let topic = app
+        .current_chat
+        .as_deref()
+        .and_then(|uuid| {
+            app.chat_list
+                .iter()
+                .find(|c| c.uuid == uuid)
+                .map(|c| c.topic.as_str())
+        })
+        .or(app.current_chat.as_deref())
+        .unwrap_or("(no chat)");
+    let keys_indicator = if app.has_keys { "[secure]" } else { "[no keys]" };
     let topic_line = Line::from(vec![
         Span::styled(
             topic,
@@ -34,7 +44,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
         ),
         Span::raw("  "),
         Span::styled(
-            format!("{} members", app.members.len()),
+            {
+                let total = app.members.len();
+                let online = app.members.iter().filter(|m| m.online).count();
+                if online < total {
+                    format!("{} members ({} online)", total, online)
+                } else {
+                    format!("{} members", total)
+                }
+            },
             Style::default().fg(s::dim()),
         ),
         Span::raw("  "),
@@ -58,16 +76,21 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
     } else {
         " [typing...]"
     };
-    let status = Line::from(vec![
-        Span::styled(&app.my_screenname, Style::default().fg(s::accent())),
+    let mut status_spans = vec![
+        Span::styled(app.my_screenname.clone(), Style::default().fg(s::accent())),
         Span::styled(editing_hint, Style::default().fg(s::dim())),
         Span::raw("  "),
-        Span::styled(
-            "↑↓ nav  Enter edit  →/← expand/collapse  / cmd  Alt+N split", // TODO colorize the shortcut keys
-            Style::default().fg(s::dim()),
-        ),
+    ];
+    let hint = s::hint_line(&[
+        ("↑↓", "nav"),
+        ("Enter", "edit"),
+        ("→/←", "expand/collapse"),
+        ("/", "cmd"),
+        ("Alt+\\", "vpane"),
+        ("Alt+-", "hpane"),
     ]);
-    frame.render_widget(Paragraph::new(status), chunks[2]);
+    status_spans.extend(hint.spans);
+    frame.render_widget(Paragraph::new(Line::from(status_spans)), chunks[2]);
 }
 
 fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {

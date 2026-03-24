@@ -17,7 +17,7 @@ pub enum AppEvent {
         query: String,
         results: Vec<SearchResult>,
     },
-    RedeemOk(String),
+    RedeemOk { chat_uuid: String, topic: String },
     RedeemError(String),
     LeaveChatOk,
     LeaveChatError(String),
@@ -69,8 +69,13 @@ impl EventCollector {
         tokio::spawn(async move {
             let mut ws_rx = ws_rx;
             while let Some(text) = ws_rx.recv().await {
-                let event = if text == "__connection_lost__" {
-                    AppEvent::ConnectionLost("Reconnecting...".to_string())
+                let event = if let Some(reason) = text.strip_prefix("__connection_lost__") {
+                    let reason = reason.trim_start_matches(':');
+                    AppEvent::ConnectionLost(if reason.is_empty() {
+                        "Reconnecting...".to_string()
+                    } else {
+                        reason.to_string()
+                    })
                 } else if text == "__reconnected__" {
                     AppEvent::Reconnected
                 } else if let Some(frame) = Frame::decode(&text) {

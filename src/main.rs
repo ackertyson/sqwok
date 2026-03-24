@@ -158,6 +158,15 @@ async fn main() -> Result<()> {
     );
     app.chat_list = known_chats;
     app.invitations = pending_invitations;
+    // Pre-populate name cache from local contact store so historical messages
+    // show screennames even for offline senders.
+    if let Some(ref cs) = contact_store {
+        if let Ok(contacts) = cs.all(10_000) {
+            for c in contacts {
+                app.name_cache.insert(c.uuid.to_string(), c.screenname);
+            }
+        }
+    }
     app.contact_store = contact_store;
     if let Some(err_msg) = fetch_error {
         app.toast = Some((

@@ -13,7 +13,6 @@ pub fn save_credentials(
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
 
-    println!("CRED DIR: {:?}", dir);
     let key_path = dir.join("private_key.pem");
     std::fs::write(&key_path, key_pem)?;
 

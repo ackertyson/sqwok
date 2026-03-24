@@ -111,8 +111,10 @@ pub async fn run_with_reconnect(
                 let _ = ws_in_tx.send("__connection_lost__".to_string());
             }
             Err(e) => {
-                eprintln!("ws: connection failed ({}), retrying in {:?}", e, backoff);
-                let _ = ws_in_tx.send("__connection_lost__".to_string());
+                let _ = ws_in_tx.send(format!(
+                    "__connection_lost__:{}",
+                    e.to_string().lines().next().unwrap_or("connection error")
+                ));
             }
         }
 

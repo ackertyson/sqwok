@@ -21,6 +21,8 @@ pub struct InviteInfo {
 #[derive(Deserialize)]
 struct RedeemResponse {
     chat_uuid: Uuid,
+    #[serde(default)]
+    topic: String,
 }
 
 #[derive(Deserialize)]
@@ -57,7 +59,7 @@ pub async fn redeem_invite(
     server_url: &str,
     auth_token: &str,
     code: &str,
-) -> anyhow::Result<Uuid> {
+) -> anyhow::Result<(Uuid, String)> {
     let resp = http
         .post(format!("{}/api/invites/redeem", server_url))
         .header("Authorization", auth_token)
@@ -67,7 +69,7 @@ pub async fn redeem_invite(
         .error_for_status()?
         .json::<RedeemResponse>()
         .await?;
-    Ok(resp.chat_uuid)
+    Ok((resp.chat_uuid, resp.topic))
 }
 
 pub async fn revoke_invite(

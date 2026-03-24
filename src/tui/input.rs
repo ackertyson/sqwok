@@ -103,8 +103,12 @@ fn handle_chat(app: &mut AppState, event: CtEvent) -> Action {
                 Action::Continue
             }
 
-            (KeyModifiers::ALT, KeyCode::Char('n')) => {
-                app.new_pane();
+            (KeyModifiers::ALT, KeyCode::Char('\\')) => {
+                app.split_pane_vertical();
+                Action::Continue
+            }
+            (KeyModifiers::ALT, KeyCode::Char('-')) => {
+                app.split_pane_horizontal();
                 Action::Continue
             }
             (KeyModifiers::ALT, KeyCode::Char('w')) => {

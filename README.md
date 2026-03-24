@@ -1,6 +1,6 @@
 # sqwok
 
-Rust TUI chat client. Terminal-based, end-to-end encrypted.
+Rust TUI chat app. Terminal-based, end-to-end encrypted.
 
 ![sqwok crow logo](logo.png)
 

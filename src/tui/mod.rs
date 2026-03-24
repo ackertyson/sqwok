@@ -135,6 +135,8 @@ pub async fn run(
                     let join_frame = ch.join_frame();
                     let _ = app.ws_tx.send(join_frame.encode());
                 }
+                // Fire any pending invite redeem (set via `sqwok join <code>`)
+                maybe_spawn_redeem(app, &event_tx, &http);
             }
             Some(AppEvent::InviteCreated(info)) => {
                 if let Some(ref mut inv_modal) = app.invite_modal {
@@ -172,22 +174,21 @@ pub async fn run(
                     }
                 }
             }
-            Some(AppEvent::RedeemOk(chat_uuid)) => {
-                // Add to chat list if not already present
+            Some(AppEvent::RedeemOk { chat_uuid, topic }) => {
+                // Add to chat list if not already present, then auto-join
                 if !app.chat_list.iter().any(|c| c.uuid == chat_uuid) {
                     app.chat_list.push(app::ChatSummary {
                         uuid: chat_uuid.clone(),
-                        topic: "Joined chat".to_string(),
+                        topic: if topic.is_empty() {
+                            "Chat".to_string()
+                        } else {
+                            topic
+                        },
                         member_count: 0,
                     });
-                    if app.picker_state.selected().is_none() {
-                        app.picker_state.select(Some(0));
-                    }
                 }
-                app.toast = Some((
-                    "Joined chat! Select it from the list.".to_string(),
-                    std::time::Instant::now() + std::time::Duration::from_secs(5),
-                ));
+                // Auto-join immediately — no need to "select from list"
+                app.join_chat(chat_uuid);
             }
             Some(AppEvent::RedeemError(msg)) => {
                 app.toast = Some((
@@ -351,8 +352,11 @@ fn maybe_spawn_redeem(
             }
         };
         match crate::net::invites::redeem_invite(&http, &server_url, &token, &code).await {
-            Ok(chat_uuid) => {
-                let _ = tx.send(AppEvent::RedeemOk(chat_uuid.to_string()));
+            Ok((chat_uuid, topic)) => {
+                let _ = tx.send(AppEvent::RedeemOk {
+                    chat_uuid: chat_uuid.to_string(),
+                    topic,
+                });
             }
             Err(e) => {
                 let _ = tx.send(AppEvent::RedeemError(e.to_string()));

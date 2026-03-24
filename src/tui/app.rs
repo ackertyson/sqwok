@@ -162,6 +162,15 @@ pub enum ConnStatus {
     Disconnected { reason: String, since: Instant },
 }
 
+/// How multiple panes are laid out on screen.
+#[derive(Clone, Copy)]
+pub enum PaneSplit {
+    /// Vertical divider — panes side by side (left/right)
+    Vertical,
+    /// Horizontal divider — panes stacked (upper/lower)
+    Horizontal,
+}
+
 /// In-memory display store for the TUI
 pub struct TuiMessageStore {
     /// Top-level messages ordered by global_seq
@@ -242,6 +251,8 @@ pub struct AppState {
     pub mode: Mode,
     pub panes: Vec<Pane>,
     pub active_pane: usize,
+    /// Direction of the multi-pane split layout
+    pub pane_split: PaneSplit,
     pub command_bar: Option<CommandBarState>,
     pub modal: Option<ModalKind>,
     pub invite_modal: Option<InviteModalState>,
@@ -294,6 +305,7 @@ impl AppState {
             mode: Mode::ChatPicker,
             panes: vec![Pane::new()],
             active_pane: 0,
+            pane_split: PaneSplit::Vertical,
             command_bar: None,
             modal: None,
             invite_modal: None,
@@ -334,13 +346,26 @@ impl AppState {
     }
 
     pub fn move_selection(&mut self, delta: i32) {
-        let row_count = self.render_row_count();
+        let rows = self.build_render_rows();
+        let row_count = rows.len();
         if row_count == 0 {
             return;
         }
-        let pane = &mut self.panes[self.active_pane];
-        let new_sel = (pane.selected as i32 + delta).clamp(0, row_count as i32 - 1) as usize;
-        pane.selected = new_sel;
+        let new_sel = (self.panes[self.active_pane].selected as i32 + delta)
+            .clamp(0, row_count as i32 - 1) as usize;
+        self.panes[self.active_pane].selected = new_sel;
+
+        // Auto-focus input rows when navigated to
+        if let Some(RenderRow::Input { thread_uuid, .. }) = rows.get(new_sel) {
+            let target = match thread_uuid {
+                Some(t) => InputTarget::Thread(t.clone()),
+                None => InputTarget::MainChat,
+            };
+            self.panes[self.active_pane].editing = Some(target);
+        } else {
+            // Clear editing state when navigating away from an input row
+            self.panes[self.active_pane].editing = None;
+        }
     }
 
     pub fn expand_thread(&mut self) {
@@ -394,10 +419,13 @@ impl AppState {
                 let uuid = uuid.clone();
                 self.msg_store.expanded.insert(uuid);
             }
-            Some(RenderRow::Message { uuid, .. }) => {
-                let uuid = uuid.clone();
-                self.msg_store.expanded.insert(uuid.clone());
-                self.panes[self.active_pane].editing = Some(InputTarget::Thread(uuid));
+            Some(RenderRow::Message { uuid, thread_uuid, .. }) => {
+                // Use the thread root uuid as the input target.
+                // For top-level messages, that's the message itself.
+                // For replies, use their thread_uuid parent.
+                let root = thread_uuid.clone().unwrap_or_else(|| uuid.clone());
+                self.msg_store.expanded.insert(root.clone());
+                self.panes[self.active_pane].editing = Some(InputTarget::Thread(root));
             }
             Some(RenderRow::Input { thread_uuid, .. }) => {
                 let target = match thread_uuid {
@@ -410,7 +438,14 @@ impl AppState {
         }
     }
 
-    pub fn new_pane(&mut self) {
+    pub fn split_pane_vertical(&mut self) {
+        self.pane_split = PaneSplit::Vertical;
+        self.panes.push(Pane::new());
+        self.active_pane = self.panes.len() - 1;
+    }
+
+    pub fn split_pane_horizontal(&mut self) {
+        self.pane_split = PaneSplit::Horizontal;
         self.panes.push(Pane::new());
         self.active_pane = self.panes.len() - 1;
     }
@@ -1065,7 +1100,7 @@ impl AppState {
             .and_then(|s| s.parse::<Uuid>().ok());
         if let Some(members) = payload["members"].as_array() {
             for m in members {
-                let uuid_str = m["uuid"].as_str().unwrap_or("").to_string();
+                let uuid_str = m["user_uuid"].as_str().unwrap_or("").to_string();
                 let screenname = m["screenname"].as_str().unwrap_or("?").to_string();
                 self.name_cache.insert(uuid_str.clone(), screenname.clone());
                 if let (Ok(uuid), Some(ref cs)) = (uuid_str.parse::<Uuid>(), &self.contact_store) {
@@ -1092,12 +1127,14 @@ impl AppState {
             .map(|l| l.keys().cloned().collect())
             .unwrap_or_default();
 
-        // Process leaves before joins so that a metadata-update diff (same UUID
-        // in both) ends up with the member present in the list after both halves
-        // are applied.
+        // Process leaves: mark as offline rather than removing entirely so the
+        // member count stays accurate.  A metadata-update diff has the same UUID
+        // in both leaves and joins — the join half will flip online back to true.
         if !leaving_uuids.is_empty() {
-            for uuid in &leaving_uuids {
-                self.members.retain(|m| &m.uuid != uuid);
+            for m in self.members.iter_mut() {
+                if leaving_uuids.contains(&m.uuid) {
+                    m.online = false;
+                }
             }
         }
 
@@ -1110,7 +1147,10 @@ impl AppState {
                     .unwrap_or("?")
                     .to_string();
                 self.name_cache.insert(uuid.clone(), screenname.clone());
-                if !self.members.iter().any(|m| &m.uuid == uuid) {
+                if let Some(existing) = self.members.iter_mut().find(|m| &m.uuid == uuid) {
+                    existing.online = true;
+                    existing.screenname = screenname;
+                } else {
                     self.members.push(Member {
                         uuid: uuid.clone(),
                         screenname,

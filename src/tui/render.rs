@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use super::{
-    app::{AppState, ConnStatus, ModalKind, Mode},
+    app::{AppState, ConnStatus, ModalKind, Mode, PaneSplit},
     style as s, views,
 };
 
@@ -28,8 +28,12 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
         let pane_count = app.panes.len();
         let active_pane_idx = app.active_pane;
 
+        let split_direction = match app.pane_split {
+            PaneSplit::Vertical => Direction::Horizontal,
+            PaneSplit::Horizontal => Direction::Vertical,
+        };
         let chunks = Layout::default()
-            .direction(Direction::Horizontal)
+            .direction(split_direction)
             .constraints(
                 (0..pane_count)
                     .map(|_| Constraint::Ratio(1, pane_count as u32))
