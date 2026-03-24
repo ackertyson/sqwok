@@ -1,0 +1,39 @@
+[package]
+name = "sqwok"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sqwok"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+reqwest = { version = "0.12", features = ["json", "native-tls", "blocking"] }
+rcgen = { version = "0.13", features = ["aws_lc_rs", "pem"], default-features = false }
+ring = "0.17"
+x509-parser = "0.16"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+curve25519-dalek = "4"
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+pem = "3"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+dialoguer = "0.11"
+directories = "6"
+futures-util = "0.3"
+rand = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+clap = { version = "4", features = ["derive"] }
+tokio-stream = "0.1"

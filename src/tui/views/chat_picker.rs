@@ -1,0 +1,131 @@
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
+    Frame,
+};
+
+use crate::tui::{app::AppState, style as s};
+
+pub fn draw(frame: &mut Frame, app: &mut AppState) {
+    let area = frame.area();
+
+    let has_invitations = !app.invitations.is_empty();
+    let inv_height = if has_invitations {
+        (app.invitations.len() as u16 + 2).min(6)
+    } else {
+        0
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(inv_height),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let title = Paragraph::new("sqwok")
+        .style(
+            Style::default()
+                .fg(s::accent())
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(s::dim())),
+        );
+
+    frame.render_widget(title, chunks[0]);
+
+    // Invitations section
+    if has_invitations {
+        let inv_items: Vec<ListItem> = app
+            .invitations
+            .iter()
+            .map(|inv| {
+                let from = inv
+                    .invited_by
+                    .as_deref()
+                    .map(|s| format!("  from {}", s))
+                    .unwrap_or_default();
+                let ago = {
+                    let now = chrono::Utc::now().timestamp();
+                    let diff = now - inv.received_at;
+                    if diff < 60 {
+                        "just now".to_string()
+                    } else if diff < 3600 {
+                        format!("{}m ago", diff / 60)
+                    } else if diff < 86400 {
+                        format!("{}h ago", diff / 3600)
+                    } else {
+                        format!("{}d ago", diff / 86400)
+                    }
+                };
+                let content = Line::from(vec![
+                    Span::styled("● ", Style::default().fg(ratatui::style::Color::Yellow)),
+                    Span::styled(
+                        inv.topic.clone(),
+                        Style::default()
+                            .fg(ratatui::style::Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(from, Style::default().fg(s::dim())),
+                    Span::styled(format!("  {}", ago), Style::default().fg(s::dim())),
+                ]);
+                ListItem::new(content)
+            })
+            .collect();
+
+        let inv_list = List::new(inv_items).block(
+            Block::default()
+                .title(format!(
+                    " {} pending invitation(s) — Enter to accept ",
+                    app.invitations.len()
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ratatui::style::Color::Yellow)),
+        );
+        frame.render_widget(inv_list, chunks[1]);
+    }
+
+    let items: Vec<ListItem> = app
+        .chat_list
+        .iter()
+        .map(|chat| {
+            let content = Line::from(vec![
+                Span::styled(
+                    chat.topic.clone(),
+                    Style::default().fg(s::fg()).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{} members", chat.member_count),
+                    Style::default().fg(s::dim()),
+                ),
+            ]);
+            ListItem::new(content)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(s::selection_bg()))
+        .highlight_symbol("▸ ");
+
+    frame.render_stateful_widget(list, chunks[2], &mut app.picker_state);
+
+    let help_text = if has_invitations {
+        "↑↓ navigate  Enter accept/join  I accept invitation  Ctrl-C quit"
+    } else {
+        "↑↓ navigate  Enter join  Ctrl-C quit"
+    };
+    let help = Paragraph::new(help_text)
+        .style(Style::default().fg(s::dim()))
+        .alignment(Alignment::Center);
+    frame.render_widget(help, chunks[3]);
+}

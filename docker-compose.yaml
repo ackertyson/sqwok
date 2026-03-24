@@ -1,0 +1,7 @@
+services:
+    sqwok:
+        image: local/sqwok:latest
+        environment:
+            SQWOK_SERVER: http://host.docker.internal:4000 # https://api.sqwok.io
+        volumes:
+            - '~/.sqwok:~/.sqwok'

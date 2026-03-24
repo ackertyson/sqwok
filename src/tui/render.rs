@@ -1,0 +1,124 @@
+use ratatui::{
+    layout::{Constraint, Direction, Layout},
+    style::Style,
+    widgets::{Block, Borders},
+    Frame,
+};
+
+use super::{
+    app::{AppState, ConnStatus, ModalKind, Mode},
+    style as s, views,
+};
+
+pub fn draw(frame: &mut Frame, app: &mut AppState) {
+    match app.mode {
+        Mode::ChatPicker => views::chat_picker::draw(frame, app),
+        Mode::Chat => draw_chat(frame, app),
+    }
+}
+
+fn draw_chat(frame: &mut Frame, app: &mut AppState) {
+    let area = frame.area();
+
+    if app.panes.len() == 1 {
+        // Clone the pane snapshot to avoid borrow conflict
+        let pane_snap = app.panes[0].clone_snapshot();
+        views::chat::draw(frame, area, app, &pane_snap);
+    } else {
+        let pane_count = app.panes.len();
+        let active_pane_idx = app.active_pane;
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(
+                (0..pane_count)
+                    .map(|_| Constraint::Ratio(1, pane_count as u32))
+                    .collect::<Vec<_>>(),
+            )
+            .split(area);
+
+        // Clone all pane snapshots upfront to avoid borrow issues during rendering
+        let pane_snapshots: Vec<_> = app.panes.iter().map(|p| p.clone_snapshot()).collect();
+
+        for (i, pane_snap) in pane_snapshots.iter().enumerate() {
+            let chunk = chunks[i];
+            let border_style = if i == active_pane_idx {
+                Style::default().fg(s::accent())
+            } else {
+                Style::default().fg(s::dim())
+            };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style);
+            let inner = block.inner(chunk);
+            frame.render_widget(block, chunk);
+            views::chat::draw(frame, inner, app, pane_snap);
+        }
+    }
+
+    // Overlays
+    // We need to match on the modal kind without holding a borrow on app
+    let modal_kind = app.modal.as_ref().map(|m| match m {
+        ModalKind::MemberList => 0u8,
+        ModalKind::GroupSettings => 1,
+        ModalKind::InviteCreate => 2,
+        ModalKind::Search => 3,
+        ModalKind::Contacts => 4,
+    });
+
+    if let Some(kind) = modal_kind {
+        match kind {
+            0 => views::member_list::draw(frame, app),
+            1 => views::group_settings::draw(frame, app),
+            2 => {
+                if let Some(ref inv_state) = app.invite_modal {
+                    let inv_state_clone = inv_state.clone();
+                    views::invite::draw(frame, &inv_state_clone);
+                }
+            }
+            3 => {
+                // Search modal is available from both ChatPicker and Chat modes
+                if let Some(ref search_state) = app.search_modal {
+                    // We can't clone SearchModalState (contains non-Clone SearchResult)
+                    // but we can call draw with a shared ref safely
+                    views::search::draw(frame, search_state);
+                }
+            }
+            4 => {
+                if let Some(ref contacts_state) = app.contacts_modal {
+                    views::contacts::draw(frame, contacts_state);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if app.command_bar.is_some() {
+        let cmd_clone = app.command_bar.as_ref().unwrap().clone_for_draw();
+        views::command_bar::draw(frame, &cmd_clone);
+    }
+
+    if matches!(
+        app.connection_status,
+        ConnStatus::Disconnected { .. } | ConnStatus::Connecting
+    ) {
+        views::error_toast::draw(frame, app);
+    }
+
+    // Toast notification overlay (bottom-right)
+    if let Some((ref msg, _)) = app.toast {
+        let width = (msg.len() as u16 + 4).min(area.width);
+        let toast_area = ratatui::layout::Rect::new(
+            area.width.saturating_sub(width + 1),
+            area.height.saturating_sub(2),
+            width,
+            1,
+        );
+        let toast = ratatui::widgets::Paragraph::new(msg.as_str()).style(
+            Style::default()
+                .fg(s::success_color())
+                .bg(ratatui::style::Color::Rgb(15, 30, 15)),
+        );
+        frame.render_widget(toast, toast_area);
+    }
+}
