@@ -80,6 +80,11 @@ async fn main() -> Result<()> {
         identity::registration::run_registration(&server_url, &identity_dir).await?;
     }
 
+    // Generate E2E encryption keys if missing (e.g. users registered before E2E was added)
+    if !identity_dir.join("e2e_private.key").exists() {
+        identity::e2e_keys::generate_and_store(&identity_dir)?;
+    }
+
     // Read our user UUID and screenname
     let user_uuid_str = std::fs::read_to_string(identity_dir.join("user_uuid"))
         .map_err(|_| anyhow::anyhow!("user_uuid file missing — try re-registering"))?
@@ -371,14 +376,17 @@ fn print_help() {
         format!("{BOLD}sqwok{R} v{VERSION} — terminal chat app with E2E encryption"),
         String::new(),
         format!("{GREEN}Usage:{R}"),
-        format!("  {BOLD}sqwok{R}                   Run chat client"),
-        format!("  {BOLD}sqwok new{R} {BOLD}<TOPIC>{R}       Create a new chat"),
-        format!("  {BOLD}sqwok join{R} {BOLD}<CODE>{R}       Join via invite code"),
+        format!("  {BOLD}sqwok{R}                                  Run chat client"),
+        format!("  {BOLD}sqwok new{R} {BOLD}<TOPIC>{R}                     Create a new chat"),
+        format!(
+            "  {BOLD}sqwok new{R} {BOLD}<TOPIC>{R} {DIM}--description <DESC>{R}   Create a new chat with description"
+        ),
+        format!("  {BOLD}sqwok join{R} {BOLD}<CODE>{R}                    Join via invite code"),
         String::new(),
         format!("{GREEN}Options:{R}"),
-        format!("  {BOLD}--server{R} {DIM}<URL>{R}          Server URL {DIM}(overrides $SQWOK_SERVER){R}"),
-        format!("  {BOLD}--identity{R} {DIM}<DIR>{R}        Identity directory {DIM}(overrides default){R}"),
-        format!("  {BOLD}-h{R}, {BOLD}--help{R}              Show this help"),
+        format!("  {BOLD}--server{R} {DIM}<URL>{R}      Server URL {DIM}(overrides $SQWOK_SERVER){R}"),
+        format!("  {BOLD}--identity{R} {DIM}<DIR>{R}    Identity directory {DIM}(overrides default){R}"),
+        format!("  {BOLD}-h{R}, {BOLD}--help{R}          Show this help"),
     ];
 
     let logo = if detect_truecolor() {

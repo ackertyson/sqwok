@@ -26,14 +26,40 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
     let (email, screenname) = if choice == 0 {
         let email: String = dialoguer::Input::new()
             .with_prompt("Email address")
+            .validate_with(|s: &String| -> Result<(), &str> {
+                if s.contains('@') && s.len() <= 254 {
+                    Ok(())
+                } else {
+                    Err("Please enter a valid email address")
+                }
+            })
             .interact_text()?;
         let screenname: String = dialoguer::Input::new()
             .with_prompt("Screen name")
+            .validate_with(|s: &String| -> Result<(), &str> {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    Err("Screen name cannot be empty")
+                } else if trimmed.len() > 30 {
+                    Err("Screen name must be 30 characters or fewer")
+                } else if trimmed.chars().any(|c| c.is_control()) {
+                    Err("Screen name cannot contain control characters")
+                } else {
+                    Ok(())
+                }
+            })
             .interact_text()?;
-        (email, screenname)
+        (email, screenname.trim().to_string())
     } else {
         let email: String = dialoguer::Input::new()
             .with_prompt("Email address (for account recovery)")
+            .validate_with(|s: &String| -> Result<(), &str> {
+                if s.contains('@') && s.len() <= 254 {
+                    Ok(())
+                } else {
+                    Err("Please enter a valid email address")
+                }
+            })
             .interact_text()?;
         (email, "recovery".to_string())
     };

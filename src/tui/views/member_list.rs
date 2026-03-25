@@ -14,20 +14,23 @@ pub fn draw(frame: &mut Frame, app: &AppState) {
         let items: Vec<ListItem> = app
             .members
             .iter()
-            .map(|m| {
+            .enumerate()
+            .map(|(idx, m)| {
                 let status = if m.online { "●" } else { "○" };
                 let status_color = if m.online {
                     s::success_color()
                 } else {
                     s::dim()
                 };
+                let name_color = if m.uuid == app.my_uuid {
+                    s::accent()
+                } else {
+                    s::username_color_by_index(idx)
+                };
                 ListItem::new(Line::from(vec![
                     Span::styled(status, Style::default().fg(status_color)),
                     Span::raw(" "),
-                    Span::styled(
-                        m.screenname.clone(),
-                        Style::default().fg(s::username_color(&m.uuid)),
-                    ),
+                    Span::styled(m.screenname.clone(), Style::default().fg(name_color)),
                 ]))
             })
             .collect();

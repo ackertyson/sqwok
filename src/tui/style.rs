@@ -56,9 +56,8 @@ const USERNAME_INDEXED: [u8; 12] = [
     181, // tan
 ];
 
-pub fn username_color(uuid_str: &str) -> Color {
-    let first_byte = uuid_str.as_bytes().first().copied().unwrap_or(0) as usize;
-    let idx = first_byte % USERNAME_RGB.len();
+pub fn username_color_by_index(join_idx: usize) -> Color {
+    let idx = join_idx % USERNAME_RGB.len();
     let (r, g, b) = USERNAME_RGB[idx];
     color((r, g, b), USERNAME_INDEXED[idx])
 }

@@ -2,12 +2,12 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
 use crate::tui::{
-    app::{AppState, RenderRow},
+    app::{AppState, Gutter, RenderRow},
     pane::Pane,
     style as s,
 };
@@ -87,7 +87,16 @@ pub fn draw_bottom_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     frame.render_widget(Paragraph::new(Line::from(status_spans)), area);
 }
 
+/// Width of the left-margin gutter (symbol + space).
+const GUTTER_WIDTH: u16 = 2;
+
 pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
+    // Clear the entire area first so that stale characters from previous renders
+    // (e.g. "No messages yet..." or the scrollback hint) don't bleed through when
+    // new content is shorter. Ratatui's buf.set_style only updates styles, not cell
+    // content, so without this old characters persist beyond what new spans overwrite.
+    frame.render_widget(Clear, area);
+
     let rows = app.build_render_rows_for_pane(pane);
     let total_rows = rows.len();
 
@@ -98,11 +107,17 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
         return;
     }
 
-    // Show "scroll up for older messages" hint when there's more history
-    if app.msg_store.has_more_above && pane.scroll_offset == 0 && pane.selected == 0 {
+    // Reserve left gutter; content area is inset by GUTTER_WIDTH.
+    let content_width = area.width.saturating_sub(GUTTER_WIDTH);
+    let content_x = area.x + GUTTER_WIDTH;
+
+    // Show "scroll up for older messages" hint when there's more history.
+    // Rendered in the first row; message rendering starts on the row below.
+    let hint_shown = app.msg_store.has_more_above && pane.scroll_offset == 0 && pane.selected == 0;
+    if hint_shown {
         let hint =
             Paragraph::new("↑ scroll for older messages").style(Style::default().fg(s::dim()));
-        let hint_area = Rect::new(area.x, area.y, area.width, 1);
+        let hint_area = Rect::new(content_x, area.y, content_width, 1);
         frame.render_widget(hint, hint_area);
     }
 
@@ -123,7 +138,8 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
 
     // Render rows from scroll_offset, tracking current y position.
     // Each row may occupy multiple lines depending on message length.
-    let mut y = area.y;
+    // If the scrollback hint is shown, it occupies the first row.
+    let mut y = if hint_shown { area.y + 1 } else { area.y };
     let area_bottom = area.y + area.height;
     let mut last_rendered_row = scroll_offset;
 
@@ -132,31 +148,60 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
             break;
         }
         let is_selected = abs_idx == selected;
-        let row_height = row_visual_height(row, area.width);
+        let row_height = row_visual_height(row, content_width);
         let available = area_bottom.saturating_sub(y);
         let render_height = row_height.min(available);
-        let row_area = Rect::new(area.x, y, area.width, render_height);
-        draw_row(frame, row_area, row, is_selected, area.width);
+
+        // Draw gutter symbol (▶/▼) then message content alongside it.
+        let gutter_area = Rect::new(area.x, y, GUTTER_WIDTH, render_height);
+        draw_gutter(frame, gutter_area, row, is_selected);
+        let row_area = Rect::new(content_x, y, content_width, render_height);
+        draw_row(frame, row_area, row, is_selected, content_width);
+
         y += row_height;
         last_rendered_row = abs_idx;
     }
 
-    // New messages below indicator
+    // Scroll-down indicator: count only message rows below the viewport.
     if last_rendered_row + 1 < total_rows {
-        let new_count = total_rows - last_rendered_row - 1;
-        let indicator = Paragraph::new(format!("v {} new", new_count)).style(
-            Style::default()
-                .fg(s::accent())
-                .add_modifier(Modifier::BOLD),
-        );
-        let ind_area = Rect::new(
-            area.x + area.width.saturating_sub(12),
-            area.y + area.height.saturating_sub(1),
-            11,
-            1,
-        );
-        frame.render_widget(indicator, ind_area);
+        let msg_below = rows[last_rendered_row + 1..]
+            .iter()
+            .filter(|r| matches!(r, RenderRow::Message { .. }))
+            .count();
+        if msg_below > 0 {
+            let indicator = Paragraph::new(format!("↓ {}", msg_below)).style(
+                Style::default()
+                    .fg(s::accent())
+                    .add_modifier(Modifier::BOLD),
+            );
+            let ind_area = Rect::new(
+                area.x + area.width.saturating_sub(8),
+                area.y + area.height.saturating_sub(1),
+                7,
+                1,
+            );
+            frame.render_widget(indicator, ind_area);
+        }
     }
+}
+
+/// Render the left-margin gutter triangle for a row.
+fn draw_gutter(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool) {
+    let symbol = match row {
+        RenderRow::CollapsedThread { .. } => "▶",
+        RenderRow::Message {
+            gutter: Gutter::Collapsed,
+            ..
+        } => "▶",
+        RenderRow::Message {
+            gutter: Gutter::Expanded,
+            ..
+        } => "▼",
+        _ => " ",
+    };
+    let color = if is_selected { s::accent() } else { s::dim() };
+    let line = Line::from(Span::styled(symbol, Style::default().fg(color)));
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// Compute how many terminal lines a row will occupy at the given width.
@@ -329,11 +374,10 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
         }
         RenderRow::Message {
             author,
-            author_uuid,
+            author_color,
             body,
             timestamp,
             indent,
-            is_mine,
             is_pending,
             highlight_age,
             reply_to_uuid,
@@ -355,15 +399,9 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
 
             let indent_str = build_indent(*indent);
             let reply_prefix = if reply_to_uuid.is_some() { "↩ " } else { "" };
-            let name_style = if *is_mine {
-                Style::default()
-                    .fg(s::accent())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(s::username_color(author_uuid))
-                    .add_modifier(Modifier::BOLD)
-            };
+            let name_style = Style::default()
+                .fg(*author_color)
+                .add_modifier(Modifier::BOLD);
 
             let pending_suffix = if *is_pending { " sending..." } else { "" };
             let full_body = format!("{}{}", body, pending_suffix);
@@ -412,16 +450,30 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             let mut lines: Vec<Line> = Vec::new();
             let wrapped = wrap_words(&full_body, first_avail, cont_avail);
             let n = wrapped.len();
+            // Detect height mismatches: if the computed line count doesn't match the
+            // allocated area height, stale buffer content can bleed through.
+            if n as u16 != area.height {
+                crate::dlog!(
+                    "MSG HEIGHT MISMATCH: area.h={} lines={} w={} prefix={} ts={} body={:?}",
+                    area.height,
+                    n,
+                    avail_width,
+                    prefix_len,
+                    ts_len,
+                    &full_body[..full_body.len().min(40)]
+                );
+            }
             for (i, line_text) in wrapped.into_iter().enumerate() {
                 let is_first = i == 0;
                 let is_last = i + 1 == n;
+                let body_style = Style::default().fg(s::fg());
                 let line = if is_first && is_last {
                     let mut spans = vec![
                         Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
                         Span::styled(reply_prefix.to_string(), Style::default().fg(s::dim())),
                         Span::styled(author.clone(), name_style),
-                        Span::raw("  "),
-                        Span::raw(line_text),
+                        Span::styled("  ", body_style),
+                        Span::styled(line_text, body_style),
                     ];
                     spans.extend(trailing_spans(vec![]));
                     Line::from(spans)
@@ -430,15 +482,21 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                         Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
                         Span::styled(reply_prefix.to_string(), Style::default().fg(s::dim())),
                         Span::styled(author.clone(), name_style),
-                        Span::raw("  "),
-                        Span::raw(line_text),
+                        Span::styled("  ", body_style),
+                        Span::styled(line_text, body_style),
                     ])
                 } else if is_last {
-                    let mut spans = vec![Span::raw(padding.clone()), Span::raw(line_text)];
+                    let mut spans = vec![
+                        Span::raw(padding.clone()),
+                        Span::styled(line_text, body_style),
+                    ];
                     spans.extend(trailing_spans(vec![]));
                     Line::from(spans)
                 } else {
-                    Line::from(vec![Span::raw(padding.clone()), Span::raw(line_text)])
+                    Line::from(vec![
+                        Span::raw(padding.clone()),
+                        Span::styled(line_text, body_style),
+                    ])
                 };
                 lines.push(line.style(Style::default().bg(actual_bg)));
             }
@@ -450,19 +508,14 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
         }
         RenderRow::CollapsedThread {
             author,
-            author_uuid,
-            is_mine,
+            author_color,
             preview,
             reply_count,
             timestamp,
             typing_active,
             ..
         } => {
-            let author_color = if *is_mine {
-                s::accent()
-            } else {
-                s::username_color(author_uuid)
-            };
+            let author_color = *author_color;
             let mut spans = vec![
                 Span::styled(
                     author.clone(),
@@ -565,7 +618,7 @@ fn indent_width(indent: u8) -> usize {
     match indent {
         0 => 0,
         1 => 5, // "  +- "
-        _ => 9, // "  |  +- "
+        _ => 8, // "  |  +- "
     }
 }
 

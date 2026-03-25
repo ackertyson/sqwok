@@ -530,14 +530,16 @@ impl AppState {
                 .expanded
                 .contains(msg_uuid.as_str())
             {
-                // Depth-0 expanded thread: collapse it.
+                // Depth-0 expanded thread: collapse it and clear any thread editing state.
                 self.panes[self.active_pane]
                     .expanded
                     .remove(msg_uuid.as_str());
+                self.panes[self.active_pane].editing = None;
             }
         } else if let Some(root) = thread_uuid {
             // Thread input row: collapse the top-level thread.
             self.panes[self.active_pane].expanded.remove(&root);
+            self.panes[self.active_pane].editing = None;
         }
     }
 
@@ -707,10 +709,35 @@ impl AppState {
                     };
                     self.highlights.insert(msg_uuid, Instant::now());
                     self.msg_store.insert(msg);
-                    // Auto-scroll to the new message
-                    let row_count = self.render_row_count();
+                    // Auto-scroll: stay in the current thread context after sending.
+                    // Find the input row matching the context we just sent from.
+                    let rows = self.build_render_rows();
+                    let target_idx = rows.iter().position(|r| {
+                        if let RenderRow::Input {
+                            thread_uuid: row_thread,
+                            reply_to_uuid: row_reply,
+                            ..
+                        } = r
+                        {
+                            match &editing_target {
+                                None | Some(InputTarget::MainChat) => {
+                                    row_thread.is_none() && row_reply.is_none()
+                                }
+                                Some(InputTarget::Thread(root)) => {
+                                    row_thread.as_deref() == Some(root.as_str())
+                                        && row_reply.is_none()
+                                }
+                                Some(InputTarget::Reply(reply_uuid, thread)) => {
+                                    row_thread.as_deref() == Some(thread.as_str())
+                                        && row_reply.as_deref() == Some(reply_uuid.as_str())
+                                }
+                            }
+                        } else {
+                            false
+                        }
+                    });
                     let pane = &mut self.panes[self.active_pane];
-                    pane.selected = row_count.saturating_sub(1);
+                    pane.selected = target_idx.unwrap_or_else(|| rows.len().saturating_sub(1));
                 }
             }
             Err(e) => {
@@ -1454,6 +1481,19 @@ impl AppState {
             }
         };
 
+        let author_color = |sender_uuid: &str| -> ratatui::style::Color {
+            if sender_uuid == self.my_uuid {
+                super::style::accent()
+            } else {
+                let idx = self
+                    .members
+                    .iter()
+                    .position(|m| m.uuid == sender_uuid)
+                    .unwrap_or(0);
+                super::style::username_color_by_index(idx)
+            }
+        };
+
         for top_uuid in &self.msg_store.top_level {
             let msg = match self.msg_store.by_uuid.get(top_uuid) {
                 Some(m) => m,
@@ -1473,28 +1513,32 @@ impl AppState {
                 rows.push(RenderRow::CollapsedThread {
                     uuid: top_uuid.clone(),
                     author: display_name(&msg.sender_uuid, &msg.sender_name),
-                    author_uuid: msg.sender_uuid.clone(),
-                    is_mine: msg.sender_uuid == self.my_uuid,
+                    author_color: author_color(&msg.sender_uuid),
                     preview,
                     reply_count,
                     timestamp: format_timestamp(&msg.timestamp),
                     typing_active,
                 });
             } else {
+                let top_gutter = if reply_count > 0 {
+                    Gutter::Expanded
+                } else {
+                    Gutter::None
+                };
                 rows.push(RenderRow::Message {
                     uuid: top_uuid.clone(),
                     author: display_name(&msg.sender_uuid, &msg.sender_name),
-                    author_uuid: msg.sender_uuid.clone(),
+                    author_color: author_color(&msg.sender_uuid),
                     body: msg.body.clone(),
                     timestamp: format_timestamp(&msg.timestamp),
                     indent: 0,
                     thread_uuid: None,
                     reply_to_uuid: msg.reply_to_uuid.clone(),
-                    is_mine: msg.sender_uuid == self.my_uuid,
                     is_pending: msg.pending,
                     highlight_age: self.highlights.get(top_uuid).map(|i| i.elapsed()),
                     collapsed_sub_count: None,
                     sub_typing_active: false,
+                    gutter: top_gutter,
                 });
 
                 // Thread replies if expanded
@@ -1544,20 +1588,34 @@ impl AppState {
                             .typing_indicators
                             .iter()
                             .any(|(_, r)| r.as_deref() == Some(reply_uuid.as_str()));
+                        let has_sub_replies = d2_uuids.iter().any(|u| {
+                            self.msg_store
+                                .by_uuid
+                                .get(u.as_str())
+                                .map(|m| m.reply_to_uuid.as_deref() == Some(reply_uuid.as_str()))
+                                .unwrap_or(false)
+                        });
+                        let d1_gutter = if collapsed_sub_count.is_some() {
+                            Gutter::Collapsed
+                        } else if has_sub_replies {
+                            Gutter::Expanded
+                        } else {
+                            Gutter::None
+                        };
                         rows.push(RenderRow::Message {
                             uuid: reply_uuid.to_string(),
                             author: display_name(&reply.sender_uuid, &reply.sender_name),
-                            author_uuid: reply.sender_uuid.clone(),
+                            author_color: author_color(&reply.sender_uuid),
                             body: reply.body.clone(),
                             timestamp: format_timestamp(&reply.timestamp),
                             indent: 1,
                             thread_uuid: Some(top_uuid.clone()),
                             reply_to_uuid: None,
-                            is_mine: reply.sender_uuid == self.my_uuid,
                             is_pending: reply.pending,
                             highlight_age: self.highlights.get(*reply_uuid).map(|i| i.elapsed()),
                             collapsed_sub_count,
                             sub_typing_active,
+                            gutter: d1_gutter,
                         });
 
                         // Depth-2 replies — only shown when the subthread is not collapsed.
@@ -1573,13 +1631,12 @@ impl AppState {
                                 rows.push(RenderRow::Message {
                                     uuid: sub_uuid.to_string(),
                                     author: display_name(&sub.sender_uuid, &sub.sender_name),
-                                    author_uuid: sub.sender_uuid.clone(),
+                                    author_color: author_color(&sub.sender_uuid),
                                     body: sub.body.clone(),
                                     timestamp: format_timestamp(&sub.timestamp),
                                     indent: 2,
                                     thread_uuid: Some(top_uuid.clone()),
                                     reply_to_uuid: sub.reply_to_uuid.clone(),
-                                    is_mine: sub.sender_uuid == self.my_uuid,
                                     is_pending: sub.pending,
                                     highlight_age: self
                                         .highlights
@@ -1587,6 +1644,7 @@ impl AppState {
                                         .map(|i| i.elapsed()),
                                     collapsed_sub_count: None,
                                     sub_typing_active: false,
+                                    gutter: Gutter::None,
                                 });
                             }
 
@@ -1669,7 +1727,13 @@ impl AppState {
 fn format_timestamp(ts: &str) -> String {
     use chrono::{DateTime, Local};
     if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
-        return dt.with_timezone(&Local).format("%H:%M").to_string();
+        let local = dt.with_timezone(&Local);
+        let today = Local::now().date_naive();
+        if local.date_naive() == today {
+            return local.format("%H:%M").to_string();
+        } else {
+            return local.format("%b %d %H:%M").to_string();
+        }
     }
     // Fallback: extract HH:MM directly from ISO 8601 string (UTC)
     if ts.len() >= 16 {
@@ -1679,30 +1743,39 @@ fn format_timestamp(ts: &str) -> String {
     }
 }
 
+/// Indicates whether a message row has a thread and its expansion state,
+/// used to render the gutter triangle indicator.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gutter {
+    None,
+    Collapsed,
+    Expanded,
+}
+
 #[derive(Debug, Clone)]
 pub enum RenderRow {
     Message {
         uuid: String,
         author: String,
-        author_uuid: String,
+        author_color: ratatui::style::Color,
         body: String,
         timestamp: String,
         indent: u8,
         thread_uuid: Option<String>,
         reply_to_uuid: Option<String>,
-        is_mine: bool,
         is_pending: bool,
         highlight_age: Option<std::time::Duration>,
         /// For depth-1 messages with a collapsed subthread, the number of hidden depth-2 replies.
         collapsed_sub_count: Option<usize>,
         /// True when peers are typing in this depth-1 message's collapsed subthread.
         sub_typing_active: bool,
+        /// Thread indicator for the left-margin gutter.
+        gutter: Gutter,
     },
     CollapsedThread {
         uuid: String,
         author: String,
-        author_uuid: String,
-        is_mine: bool,
+        author_color: ratatui::style::Color,
         preview: String,
         reply_count: u32,
         timestamp: String,

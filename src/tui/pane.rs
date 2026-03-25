@@ -45,8 +45,16 @@ impl Pane {
     }
 
     pub fn push_char(&mut self, c: char) {
+        // Reject control characters (except common whitespace) and enforce a
+        // reasonable message length cap to prevent runaway input.
+        if c.is_control() && c != '\t' {
+            return;
+        }
         if let Some(target) = self.editing.clone() {
-            self.inputs.entry(target).or_default().push(c);
+            let s = self.inputs.entry(target).or_default();
+            if s.len() < 4096 {
+                s.push(c);
+            }
         }
     }
 
