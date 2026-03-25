@@ -98,12 +98,10 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
         .chat_list
         .iter()
         .map(|chat| {
-            let mut spans = vec![
-                Span::styled(
-                    chat.topic.clone(),
-                    Style::default().fg(s::fg()).add_modifier(Modifier::BOLD),
-                ),
-            ];
+            let mut spans = vec![Span::styled(
+                chat.topic.clone(),
+                Style::default().fg(s::fg()).add_modifier(Modifier::BOLD),
+            )];
             if let Some(desc) = &chat.description {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(desc.clone(), Style::default().fg(s::dim())));

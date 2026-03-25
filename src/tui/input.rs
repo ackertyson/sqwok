@@ -131,6 +131,11 @@ fn handle_chat(app: &mut AppState, event: CtEvent) -> Action {
                 Action::Continue
             }
 
+            (KeyModifiers::NONE, KeyCode::Char('r')) => {
+                app.reply_to_selected();
+                Action::Continue
+            }
+
             (KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
                 app.jump_to_latest();
                 Action::Continue

@@ -190,11 +190,23 @@ pub fn draw(frame: &mut Frame, state: &CommandBarState) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            state.input.split_whitespace().next().unwrap_or("").to_string(),
-            Style::default().fg(s::accent()).add_modifier(Modifier::BOLD),
+            state
+                .input
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string(),
+            Style::default()
+                .fg(s::accent())
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            state.input.find(' ').map(|i| &state.input[i..]).unwrap_or("").to_string(),
+            state
+                .input
+                .find(' ')
+                .map(|i| &state.input[i..])
+                .unwrap_or("")
+                .to_string(),
             Style::default().fg(s::fg()),
         ),
         Span::styled("█", Style::default().fg(s::accent())),

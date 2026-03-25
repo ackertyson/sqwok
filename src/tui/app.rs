@@ -360,10 +360,16 @@ impl AppState {
         self.panes[self.active_pane].selected = new_sel;
 
         // Auto-focus input rows when navigated to
-        if let Some(RenderRow::Input { thread_uuid, .. }) = rows.get(new_sel) {
-            let target = match thread_uuid {
-                Some(t) => InputTarget::Thread(t.clone()),
-                None => InputTarget::MainChat,
+        if let Some(RenderRow::Input {
+            thread_uuid,
+            reply_to_uuid,
+            ..
+        }) = rows.get(new_sel)
+        {
+            let target = match (thread_uuid, reply_to_uuid) {
+                (Some(thread), Some(reply)) => InputTarget::Reply(reply.clone(), thread.clone()),
+                (Some(t), None) => InputTarget::Thread(t.clone()),
+                _ => InputTarget::MainChat,
             };
             self.panes[self.active_pane].editing = Some(target);
         } else {
@@ -376,13 +382,48 @@ impl AppState {
         let selected = self.panes[self.active_pane].selected;
         if let Some(uuid) = self.selected_collapsed_thread_uuid(selected) {
             self.msg_store.expanded.insert(uuid);
+        } else {
+            // On a depth-1 message, right arrow initiates a depth-2 reply.
+            self.reply_to_selected();
         }
     }
 
     pub fn collapse_thread(&mut self) {
+        let rows = self.build_render_rows();
         let selected = self.panes[self.active_pane].selected;
-        if let Some(uuid) = self.selected_thread_root(selected) {
-            self.msg_store.expanded.remove(&uuid);
+
+        // Walk the selected row to determine what to do.
+        let reply_to = match rows.get(selected) {
+            Some(RenderRow::Message { reply_to_uuid, .. }) => reply_to_uuid.clone(),
+            Some(RenderRow::Input { reply_to_uuid, .. }) => reply_to_uuid.clone(),
+            _ => None,
+        };
+        let thread_root = match rows.get(selected) {
+            Some(RenderRow::Message {
+                thread_uuid, uuid, ..
+            }) => thread_uuid.clone().or_else(|| {
+                if self.msg_store.expanded.contains(uuid.as_str()) {
+                    Some(uuid.clone())
+                } else {
+                    None
+                }
+            }),
+            Some(RenderRow::Input { thread_uuid, .. }) => thread_uuid.clone(),
+            _ => None,
+        };
+
+        if let Some(parent_uuid) = reply_to {
+            // Depth-2 row: move focus up to the parent depth-1 message.
+            if let Some(idx) = rows
+                .iter()
+                .position(|r| matches!(r, RenderRow::Message { uuid, .. } if uuid == &parent_uuid))
+            {
+                self.panes[self.active_pane].selected = idx;
+                self.panes[self.active_pane].editing = None;
+            }
+        } else if let Some(root) = thread_root {
+            // Depth-0/depth-1/thread-input row: collapse the top-level thread.
+            self.msg_store.expanded.remove(&root);
         }
     }
 
@@ -397,24 +438,6 @@ impl AppState {
         })
     }
 
-    fn selected_thread_root(&self, selected: usize) -> Option<String> {
-        let rows = self.build_render_rows();
-        rows.get(selected).and_then(|r| match r {
-            RenderRow::Message {
-                thread_uuid: Some(root),
-                ..
-            } => Some(root.clone()),
-            RenderRow::Message { uuid, .. } => {
-                if self.msg_store.expanded.contains(uuid) {
-                    Some(uuid.clone())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        })
-    }
-
     pub fn activate(&mut self) {
         let rows = self.build_render_rows();
         let selected = self.panes[self.active_pane].selected;
@@ -426,21 +449,65 @@ impl AppState {
             Some(RenderRow::Message {
                 uuid, thread_uuid, ..
             }) => {
-                // Use the thread root uuid as the input target.
-                // For top-level messages, that's the message itself.
-                // For replies, use their thread_uuid parent.
-                let root = thread_uuid.clone().unwrap_or_else(|| uuid.clone());
+                let uuid = uuid.clone();
+                let thread_uuid = thread_uuid.clone();
+                if let Some(root) = &thread_uuid {
+                    // Depth-1 message: check if it's a direct thread reply (no reply_to)
+                    // and if so, start a depth-2 reply targeting it.
+                    if self
+                        .msg_store
+                        .by_uuid
+                        .get(uuid.as_str())
+                        .map(|m| m.reply_to_uuid.is_none())
+                        .unwrap_or(false)
+                    {
+                        let root = root.clone();
+                        self.msg_store.expanded.insert(root.clone());
+                        self.panes[self.active_pane].editing = Some(InputTarget::Reply(uuid, root));
+                        return;
+                    }
+                }
+                // Top-level message: expand thread and focus thread input.
+                let root = thread_uuid.unwrap_or(uuid);
                 self.msg_store.expanded.insert(root.clone());
                 self.panes[self.active_pane].editing = Some(InputTarget::Thread(root));
             }
-            Some(RenderRow::Input { thread_uuid, .. }) => {
-                let target = match thread_uuid {
-                    Some(t) => InputTarget::Thread(t.clone()),
-                    None => InputTarget::MainChat,
+            Some(RenderRow::Input {
+                thread_uuid,
+                reply_to_uuid,
+                ..
+            }) => {
+                let target = match (thread_uuid, reply_to_uuid) {
+                    (Some(thread), Some(reply)) => {
+                        InputTarget::Reply(reply.clone(), thread.clone())
+                    }
+                    (Some(t), None) => InputTarget::Thread(t.clone()),
+                    _ => InputTarget::MainChat,
                 };
                 self.panes[self.active_pane].editing = Some(target);
             }
             None => {}
+        }
+    }
+
+    /// Initiate a depth-2 reply to the currently selected depth-1 message.
+    pub fn reply_to_selected(&mut self) {
+        let rows = self.build_render_rows();
+        let selected = self.panes[self.active_pane].selected;
+        if let Some(RenderRow::Message {
+            uuid,
+            thread_uuid: Some(root),
+            ..
+        }) = rows.get(selected)
+        {
+            if let Some(msg) = self.msg_store.by_uuid.get(uuid.as_str()) {
+                if msg.reply_to_uuid.is_none() {
+                    let root = root.clone();
+                    let uuid = uuid.clone();
+                    self.msg_store.expanded.insert(root.clone());
+                    self.panes[self.active_pane].editing = Some(InputTarget::Reply(uuid, root));
+                }
+            }
         }
     }
 
@@ -496,6 +563,9 @@ impl AppState {
 
         let (thread_uuid, reply_to_uuid): (Option<String>, Option<String>) = match &editing_target {
             Some(InputTarget::Thread(root)) => (Some(root.clone()), None),
+            Some(InputTarget::Reply(reply_uuid, thread)) => {
+                (Some(thread.clone()), Some(reply_uuid.clone()))
+            }
             _ => (None, None),
         };
 
@@ -1402,30 +1472,83 @@ impl AppState {
                         .get(top_uuid)
                         .cloned()
                         .unwrap_or_default();
-                    for reply_uuid in replies.iter() {
-                        let reply = match self.msg_store.by_uuid.get(reply_uuid) {
+
+                    // Partition into depth-1 (no reply_to) and depth-2 (has reply_to)
+                    let (d1_uuids, d2_uuids): (Vec<_>, Vec<_>) = replies.iter().partition(|u| {
+                        self.msg_store
+                            .by_uuid
+                            .get(*u)
+                            .map(|m| m.reply_to_uuid.is_none())
+                            .unwrap_or(true)
+                    });
+
+                    for reply_uuid in d1_uuids.iter() {
+                        let reply = match self.msg_store.by_uuid.get(*reply_uuid) {
                             Some(m) => m,
                             None => continue,
                         };
                         rows.push(RenderRow::Message {
-                            uuid: reply_uuid.clone(),
+                            uuid: reply_uuid.to_string(),
                             author: display_name(&reply.sender_uuid, &reply.sender_name),
                             author_uuid: reply.sender_uuid.clone(),
                             body: reply.body.clone(),
                             timestamp: format_timestamp(&reply.timestamp),
                             indent: 1,
                             thread_uuid: Some(top_uuid.clone()),
-                            reply_to_uuid: reply.reply_to_uuid.clone(),
+                            reply_to_uuid: None,
                             is_mine: reply.sender_uuid == self.my_uuid,
                             is_pending: reply.pending,
-                            highlight_age: self.highlights.get(reply_uuid).map(|i| i.elapsed()),
+                            highlight_age: self.highlights.get(*reply_uuid).map(|i| i.elapsed()),
                         });
+
+                        // Depth-2 replies that target this depth-1 message
+                        for sub_uuid in d2_uuids.iter() {
+                            let sub = match self.msg_store.by_uuid.get(*sub_uuid) {
+                                Some(m) => m,
+                                None => continue,
+                            };
+                            if sub.reply_to_uuid.as_deref() != Some(reply_uuid.as_str()) {
+                                continue;
+                            }
+                            rows.push(RenderRow::Message {
+                                uuid: sub_uuid.to_string(),
+                                author: display_name(&sub.sender_uuid, &sub.sender_name),
+                                author_uuid: sub.sender_uuid.clone(),
+                                body: sub.body.clone(),
+                                timestamp: format_timestamp(&sub.timestamp),
+                                indent: 2,
+                                thread_uuid: Some(top_uuid.clone()),
+                                reply_to_uuid: sub.reply_to_uuid.clone(),
+                                is_mine: sub.sender_uuid == self.my_uuid,
+                                is_pending: sub.pending,
+                                highlight_age: self.highlights.get(*sub_uuid).map(|i| i.elapsed()),
+                            });
+                        }
+
+                        // Inline depth-2 reply input if active for this depth-1 message
+                        let reply_target =
+                            InputTarget::Reply(reply_uuid.to_string(), top_uuid.clone());
+                        if pane.editing.as_ref() == Some(&reply_target) {
+                            rows.push(RenderRow::Input {
+                                thread_uuid: Some(top_uuid.clone()),
+                                reply_to_uuid: Some(reply_uuid.to_string()),
+                                indent: 2,
+                                is_active: true,
+                                content: pane
+                                    .inputs
+                                    .get(&reply_target)
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            });
+                        }
                     }
-                    // Thread input prompt
+
+                    // Thread input prompt at depth-1
                     let thread_input_target = InputTarget::Thread(top_uuid.clone());
                     let is_editing = pane.editing.as_ref() == Some(&thread_input_target);
                     rows.push(RenderRow::Input {
                         thread_uuid: Some(top_uuid.clone()),
+                        reply_to_uuid: None,
                         indent: 1,
                         is_active: is_editing,
                         content: pane
@@ -1442,6 +1565,7 @@ impl AppState {
         let is_editing_main = pane.editing.as_ref() == Some(&InputTarget::MainChat);
         rows.push(RenderRow::Input {
             thread_uuid: None,
+            reply_to_uuid: None,
             indent: 0,
             is_active: is_editing_main,
             content: pane
@@ -1494,6 +1618,7 @@ pub enum RenderRow {
     },
     Input {
         thread_uuid: Option<String>,
+        reply_to_uuid: Option<String>,
         indent: u8,
         is_active: bool,
         content: String,

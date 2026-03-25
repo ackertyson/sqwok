@@ -3,7 +3,8 @@ use std::collections::HashMap;
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum InputTarget {
     MainChat,
-    Thread(String), // thread root uuid
+    Thread(String),        // thread root uuid
+    Reply(String, String), // (reply_to_uuid, thread_root_uuid)
 }
 
 #[derive(Clone, Debug)]

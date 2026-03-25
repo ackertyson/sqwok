@@ -37,14 +37,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
     } else {
         "[no keys]"
     };
-    let mut topic_spans = vec![
-        Span::styled(
-            topic,
-            Style::default()
-                .fg(s::accent())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
+    let mut topic_spans = vec![Span::styled(
+        topic,
+        Style::default()
+            .fg(s::accent())
+            .add_modifier(Modifier::BOLD),
+    )];
     if let Some(desc) = description {
         topic_spans.push(Span::raw("  "));
         topic_spans.push(Span::styled(desc, Style::default().fg(s::dim())));
@@ -373,6 +371,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
         }
         RenderRow::Input {
             thread_uuid,
+            reply_to_uuid: _,
             indent,
             is_active,
             content,

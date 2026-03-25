@@ -13,9 +13,21 @@ use tokio::sync::mpsc;
 
 use tui::app::{AppState, ChatSummary, Invitation};
 
+const LOGO_256: &str = include_str!("../logo_256.txt");
+const LOGO_TRUE: &str = include_str!("../logo_truecolor.txt");
+
 #[derive(clap::Parser)]
-#[command(name = "sqwok", about = "Terminal group chat with E2E encryption")]
+#[command(
+    name = "sqwok",
+    about = "Terminal group chat with E2E encryption",
+    disable_help_flag = true,
+    disable_help_subcommand = true
+)]
 struct Cli {
+    /// Show help
+    #[arg(short, long, action = clap::ArgAction::SetTrue)]
+    help: bool,
+
     /// Server URL (overrides SQWOK_SERVER env var)
     #[arg(long, global = true)]
     server: Option<String>,
@@ -30,6 +42,8 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum SubCommand {
+    /// Show help
+    Help,
     /// Create a new chat and open it
     New {
         /// Chat topic
@@ -49,6 +63,11 @@ enum SubCommand {
 async fn main() -> Result<()> {
     use clap::Parser;
     let cli = Cli::parse();
+
+    if cli.help || matches!(cli.command, Some(SubCommand::Help)) {
+        print_help();
+        return Ok(());
+    }
 
     let identity_dir = cli.identity.unwrap_or_else(config::identity_dir);
     let server_url = cli.server.unwrap_or_else(config::server_url);
@@ -209,7 +228,7 @@ async fn main() -> Result<()> {
             // Let the run loop handle redeeming after WS connects
             app.pending_redeem = Some(code.to_uppercase().replace('-', ""));
         }
-        None => {}
+        Some(SubCommand::Help) | None => {}
     }
 
     let mut tui_instance = tui::Tui::new()?;
@@ -291,4 +310,112 @@ async fn create_chat(
         description,
         member_count: 1,
     })
+}
+
+fn detect_truecolor() -> bool {
+    if let Ok(ct) = std::env::var("COLORTERM") {
+        ct == "truecolor" || ct == "24bit"
+    } else {
+        false
+    }
+}
+
+fn visible_width(s: &str) -> usize {
+    let mut w = 0;
+    let mut in_esc = false;
+    for c in s.chars() {
+        if in_esc {
+            if c.is_ascii_alphabetic() {
+                in_esc = false;
+            }
+        } else if c == '\x1b' {
+            in_esc = true;
+        } else {
+            w += 1;
+        }
+    }
+    w
+}
+
+// Like visible_width but stops at the last non-whitespace character,
+// so trailing spaces in logo lines don't inflate the column width check.
+fn visible_content_width(s: &str) -> usize {
+    let mut w = 0;
+    let mut last_nonspace = 0;
+    let mut in_esc = false;
+    for c in s.chars() {
+        if in_esc {
+            if c.is_ascii_alphabetic() {
+                in_esc = false;
+            }
+        } else if c == '\x1b' {
+            in_esc = true;
+        } else {
+            w += 1;
+            if !c.is_ascii_whitespace() {
+                last_nonspace = w;
+            }
+        }
+    }
+    last_nonspace
+}
+
+fn print_help() {
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    const BOLD: &str = "\x1b[1m";
+    const GREEN: &str = "\x1b[1;32m";
+    const DIM: &str = "\x1b[2m";
+    const R: &str = "\x1b[0m";
+
+    let lines = vec![
+        format!("{BOLD}sqwok{R} v{VERSION} — terminal group chat with E2E encryption"),
+        String::new(),
+        format!("{GREEN}Usage:{R}"),
+        format!("  {BOLD}sqwok{R}                   Open the chat picker"),
+        format!("  {BOLD}sqwok new{R} {BOLD}<TOPIC>{R}       Create a new chat"),
+        format!("  {BOLD}sqwok join{R} {BOLD}<CODE>{R}       Join via invite code"),
+        String::new(),
+        format!("{GREEN}Options:{R}"),
+        format!("  {BOLD}--server{R} {DIM}<URL>{R}          Server URL {DIM}(overrides $SQWOK_SERVER){R}"),
+        format!("  {BOLD}--identity{R} {DIM}<DIR>{R}         Identity directory {DIM}(overrides default){R}"),
+        format!("  {BOLD}-h{R}, {BOLD}--help{R}              Show this help"),
+    ];
+
+    let logo = if detect_truecolor() {
+        LOGO_TRUE
+    } else {
+        LOGO_256
+    };
+    let logo_lines: Vec<&str> = logo.lines().collect();
+    let logo_width = logo_lines
+        .iter()
+        .map(|l| visible_content_width(l))
+        .max()
+        .unwrap_or(0);
+
+    let gap = 3;
+    let help_width = lines.iter().map(|l| visible_width(l)).max().unwrap_or(0);
+    let tw = terminal_size::terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .unwrap_or(80);
+
+    if tw >= help_width + gap + logo_width && !logo_lines.is_empty() {
+        let total = lines.len().max(logo_lines.len());
+        let logo_offset = total.saturating_sub(logo_lines.len()) / 2;
+
+        for i in 0..total {
+            let help_part = lines.get(i).map(|s| s.as_str()).unwrap_or("");
+            let logo_part = if i >= logo_offset && i - logo_offset < logo_lines.len() {
+                logo_lines[i - logo_offset]
+            } else {
+                ""
+            };
+            let pad = help_width + gap - visible_width(help_part);
+            println!("{}{:pad$}{}\x1b[0m", help_part, "", logo_part, pad = pad);
+        }
+    } else {
+        for line in &lines {
+            println!("{line}");
+        }
+    }
 }
