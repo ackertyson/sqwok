@@ -15,6 +15,14 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
         Mode::ChatPicker => views::chat_picker::draw(frame, app),
         Mode::Chat => draw_chat(frame, app),
     }
+
+    // Connection error overlay — shown in all modes so startup failures are visible.
+    if matches!(
+        app.connection_status,
+        ConnStatus::Disconnected { .. } | ConnStatus::Connecting
+    ) {
+        views::error_toast::draw(frame, app);
+    }
 }
 
 fn draw_chat(frame: &mut Frame, app: &mut AppState) {
@@ -100,13 +108,6 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
     if app.command_bar.is_some() {
         let cmd_clone = app.command_bar.as_ref().unwrap().clone_for_draw();
         views::command_bar::draw(frame, &cmd_clone);
-    }
-
-    if matches!(
-        app.connection_status,
-        ConnStatus::Disconnected { .. } | ConnStatus::Connecting
-    ) {
-        views::error_toast::draw(frame, app);
     }
 
     // Toast notification overlay (bottom-right)

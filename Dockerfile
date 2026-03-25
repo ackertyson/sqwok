@@ -5,10 +5,18 @@ COPY . .
 RUN cargo install --path .
 
 
+# ---
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y fish && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/cargo/bin/sqwok /usr/local/bin/sqwok
 
-# TODO add non-root user
+# Create a non-root user/group for running the application.
+RUN groupadd -r sqwok && useradd -r -g sqwok sqwok
+
+# Pre-create volume directories and set ownership before the volume mounts replace them.
+RUN mkdir -p /home/sqwok/.sqwok /home/sqwok/.local/share/sqwok \
+    && chown -R sqwok:sqwok /home/sqwok/.sqwok /home/sqwok/.local/share/sqwok
+
+USER sqwok
 
 CMD ["sqwok"]

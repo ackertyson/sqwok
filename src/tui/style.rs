@@ -27,12 +27,12 @@ fn color(rgb: (u8, u8, u8), indexed: u8) -> Color {
 
 const USERNAME_RGB: [(u8, u8, u8); 12] = [
     (230, 100, 100),
-    (100, 200, 230),
+    (60, 190, 170),
     (230, 180, 80),
     (140, 200, 100),
     (200, 130, 230),
     (230, 130, 170),
-    (100, 180, 230),
+    (230, 110, 80),
     (230, 160, 100),
     (160, 220, 180),
     (220, 200, 100),
@@ -43,12 +43,12 @@ const USERNAME_RGB: [(u8, u8, u8); 12] = [
 // Closest 256-color xterm indices for each username color
 const USERNAME_INDEXED: [u8; 12] = [
     167, // red-ish
-    81,  // blue-ish
+    43,  // teal
     214, // orange-ish
     114, // green-ish
     177, // purple-ish
     211, // pink-ish
-    75,  // steel-blue
+    173, // coral
     215, // orange
     115, // sea-green
     185, // yellow-ish
@@ -121,10 +121,7 @@ pub fn hint_line(hints: &[(&str, &str)]) -> ratatui::text::Line<'static> {
             Style::default().fg(shortcut_key_color()),
         ));
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            label.to_string(),
-            Style::default().fg(dim()),
-        ));
+        spans.push(Span::styled(label.to_string(), Style::default().fg(dim())));
     }
     Line::from(spans)
 }

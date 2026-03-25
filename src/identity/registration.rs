@@ -213,7 +213,10 @@ async fn complete_registration(
 
     std::fs::remove_file(pending_path).ok();
 
-    println!("\nRegistration complete! Identity saved to {:?}", identity_dir);
+    println!(
+        "\nRegistration complete! Identity saved to {:?}",
+        identity_dir
+    );
     println!("User UUID: {}", user_uuid);
 
     Ok(())

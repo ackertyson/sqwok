@@ -68,7 +68,15 @@ pub fn draw(frame: &mut Frame, state: &ContactsModalState) {
                     let ago = format_time_ago(c.updated_at);
                     let chat_hint = c
                         .last_seen_chat
-                        .map(|u| format!("  in {}", &u.to_string()[..8]))
+                        .map(|u| {
+                            let uuid_str = u.to_string();
+                            let name = state
+                                .chat_names
+                                .get(&uuid_str)
+                                .cloned()
+                                .unwrap_or_else(|| uuid_str.chars().take(8).collect());
+                            format!("  in {}", name)
+                        })
                         .unwrap_or_default();
                     Line::from(vec![
                         Span::styled(marker, style),

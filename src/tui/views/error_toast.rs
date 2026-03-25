@@ -13,7 +13,7 @@ use crate::tui::{
 
 pub fn draw(frame: &mut Frame, app: &AppState) {
     let area = frame.area();
-    let width = (area.width / 3).max(36).min(50);
+    let width = (area.width / 3).clamp(36, 50);
 
     let lines: Vec<Line> = match &app.connection_status {
         ConnStatus::Disconnected { ref reason, since } => {
@@ -22,7 +22,10 @@ pub fn draw(frame: &mut Frame, app: &AppState) {
             let max_reason_len = (width as usize).saturating_sub(2);
             let reason_display: String = reason.chars().take(max_reason_len).collect();
             vec![
-                Line::from(Span::styled("Disconnected", Style::default().fg(s::error_color()))),
+                Line::from(Span::styled(
+                    "Disconnected",
+                    Style::default().fg(s::error_color()),
+                )),
                 Line::from(Span::styled(reason_display, Style::default().fg(s::dim()))),
                 Line::from(Span::styled(
                     format!("{}s ago — reconnecting...", elapsed),

@@ -17,7 +17,10 @@ pub enum AppEvent {
         query: String,
         results: Vec<SearchResult>,
     },
-    RedeemOk { chat_uuid: String, topic: String },
+    RedeemOk {
+        chat_uuid: String,
+        topic: String,
+    },
     RedeemError(String),
     LeaveChatOk,
     LeaveChatError(String),

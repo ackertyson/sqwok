@@ -67,7 +67,10 @@ impl Frame {
     pub fn decode(text: &str) -> Option<Self> {
         let map: serde_json::Map<String, Value> = serde_json::from_str(text).ok()?;
         Some(Frame {
-            join_ref: map.get("join_ref").and_then(|v| v.as_str()).map(String::from),
+            join_ref: map
+                .get("join_ref")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             ref_id: map.get("ref").and_then(|v| v.as_str()).map(String::from),
             topic: map.get("topic")?.as_str()?.to_string(),
             event: map.get("event")?.as_str()?.to_string(),

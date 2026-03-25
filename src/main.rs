@@ -34,6 +34,9 @@ enum SubCommand {
     New {
         /// Chat topic
         topic: String,
+        /// Optional description shown in the chat header and group list
+        #[arg(long)]
+        description: Option<String>,
     },
     /// Join a chat using an invite code
     Join {
@@ -167,6 +170,9 @@ async fn main() -> Result<()> {
             }
         }
     }
+    // Always map our own UUID to our current screenname (overrides any stale contact entry).
+    app.name_cache
+        .insert(user_uuid_str.clone(), app.my_screenname.clone());
     app.contact_store = contact_store;
     if let Some(err_msg) = fetch_error {
         app.toast = Some((
@@ -177,9 +183,9 @@ async fn main() -> Result<()> {
 
     // Handle CLI subcommands
     match cli.command {
-        Some(SubCommand::New { topic }) => {
+        Some(SubCommand::New { topic, description }) => {
             let token = auth::token::build_token(&identity_dir, &server_url)?;
-            match create_chat(&server_url, &token, &topic, &http).await {
+            match create_chat(&server_url, &token, &topic, description.as_deref(), &http).await {
                 Ok(chat) => {
                     let uuid = chat.uuid.clone();
 
@@ -237,11 +243,13 @@ async fn fetch_chat_list(
     for item in arr {
         let uuid = item["uuid"].as_str().unwrap_or("").to_string();
         let topic = item["topic"].as_str().unwrap_or("untitled").to_string();
+        let description = item["description"].as_str().map(|s| s.to_string());
         let member_count = item["member_count"].as_u64().unwrap_or(0) as usize;
         if !uuid.is_empty() {
             chats.push(ChatSummary {
                 uuid,
                 topic,
+                description,
                 member_count,
             });
         }
@@ -253,12 +261,17 @@ async fn create_chat(
     server_url: &str,
     token: &str,
     topic: &str,
+    description: Option<&str>,
     http: &reqwest::Client,
 ) -> Result<ChatSummary> {
+    let mut body = serde_json::json!({"topic": topic});
+    if let Some(desc) = description {
+        body["description"] = serde_json::json!(desc);
+    }
     let resp: serde_json::Value = http
         .post(format!("{}/api/chats", server_url))
         .header("Authorization", token)
-        .json(&serde_json::json!({"topic": topic}))
+        .json(&body)
         .send()
         .await?
         .error_for_status()?
@@ -270,10 +283,12 @@ async fn create_chat(
         .ok_or_else(|| anyhow::anyhow!("missing uuid in create chat response"))?
         .to_string();
     let topic = resp["topic"].as_str().unwrap_or(topic).to_string();
+    let description = resp["description"].as_str().map(|s| s.to_string());
 
     Ok(ChatSummary {
         uuid,
         topic,
+        description,
         member_count: 1,
     })
 }

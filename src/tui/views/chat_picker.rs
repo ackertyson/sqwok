@@ -98,18 +98,22 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
         .chat_list
         .iter()
         .map(|chat| {
-            let content = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     chat.topic.clone(),
                     Style::default().fg(s::fg()).add_modifier(Modifier::BOLD),
                 ),
-                Span::raw("  "),
-                Span::styled(
-                    format!("{} members", chat.member_count),
-                    Style::default().fg(s::dim()),
-                ),
-            ]);
-            ListItem::new(content)
+            ];
+            if let Some(desc) = &chat.description {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(desc.clone(), Style::default().fg(s::dim())));
+            }
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                format!("{} members", chat.member_count),
+                Style::default().fg(s::dim()),
+            ));
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -127,11 +131,7 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
             ("Ctrl-C", "quit"),
         ])
     } else {
-        s::hint_line(&[
-            ("↑↓", "navigate"),
-            ("Enter", "join"),
-            ("Ctrl-C", "quit"),
-        ])
+        s::hint_line(&[("↑↓", "navigate"), ("Enter", "join"), ("Ctrl-C", "quit")])
     };
     let help = Paragraph::new(help_line).alignment(Alignment::Center);
     frame.render_widget(help, chunks[3]);

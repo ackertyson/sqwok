@@ -23,48 +23,60 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
         .split(area);
 
     // Topic bar — look up friendly name from chat_list, fall back to uuid
-    let topic = app
+    let chat_summary = app
         .current_chat
         .as_deref()
-        .and_then(|uuid| {
-            app.chat_list
-                .iter()
-                .find(|c| c.uuid == uuid)
-                .map(|c| c.topic.as_str())
-        })
+        .and_then(|uuid| app.chat_list.iter().find(|c| c.uuid == uuid));
+    let topic = chat_summary
+        .map(|c| c.topic.as_str())
         .or(app.current_chat.as_deref())
         .unwrap_or("(no chat)");
-    let keys_indicator = if app.has_keys { "[secure]" } else { "[no keys]" };
-    let topic_line = Line::from(vec![
+    let description = chat_summary.and_then(|c| c.description.as_deref());
+    let keys_indicator = if app.has_keys {
+        "[secure]"
+    } else {
+        "[no keys]"
+    };
+    let mut topic_spans = vec![
         Span::styled(
             topic,
             Style::default()
                 .fg(s::accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  "),
-        Span::styled(
-            {
-                let total = app.members.len();
-                let online = app.members.iter().filter(|m| m.online).count();
-                if online < total {
-                    format!("{} members ({} online)", total, online)
+    ];
+    if let Some(desc) = description {
+        topic_spans.push(Span::raw("  "));
+        topic_spans.push(Span::styled(desc, Style::default().fg(s::dim())));
+    }
+    topic_spans.push(Span::raw("  "));
+    let topic_line = Line::from({
+        let mut spans = topic_spans;
+        spans.extend(vec![
+            Span::styled(
+                {
+                    let total = app.members.len();
+                    let online = app.members.iter().filter(|m| m.online).count();
+                    if online < total {
+                        format!("{} members ({} online)", total, online)
+                    } else {
+                        format!("{} members", total)
+                    }
+                },
+                Style::default().fg(s::dim()),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                keys_indicator,
+                Style::default().fg(if app.has_keys {
+                    s::success_color()
                 } else {
-                    format!("{} members", total)
-                }
-            },
-            Style::default().fg(s::dim()),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            keys_indicator,
-            Style::default().fg(if app.has_keys {
-                s::success_color()
-            } else {
-                s::error_color()
-            }),
-        ),
-    ]);
+                    s::error_color()
+                }),
+            ),
+        ]);
+        spans
+    });
     frame.render_widget(Paragraph::new(topic_line), chunks[0]);
 
     // Message area
@@ -94,7 +106,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
 }
 
 fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
-    let rows = app.build_render_rows();
+    let rows = app.build_render_rows_for_pane(pane);
     let total_rows = rows.len();
 
     if total_rows == 0 {
@@ -114,7 +126,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
 
     let visible_height = area.height as usize;
 
-    // Ensure scroll_offset keeps selection visible
+    // Ensure scroll_offset keeps selection visible (in row-count units)
     let selected = pane.selected.min(total_rows.saturating_sub(1));
     let scroll_offset = {
         let offset = pane.scroll_offset;
@@ -127,28 +139,29 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
         }
     };
 
-    let visible_rows: Vec<&RenderRow> = rows
-        .iter()
-        .skip(scroll_offset)
-        .take(visible_height)
-        .collect();
+    // Render rows from scroll_offset, tracking current y position.
+    // Each row may occupy multiple lines depending on message length.
+    let mut y = area.y;
+    let area_bottom = area.y + area.height;
+    let mut last_rendered_row = scroll_offset;
 
-    for (i, row) in visible_rows.iter().enumerate() {
-        let y = area.y + i as u16;
-        if y >= area.y + area.height {
+    for (abs_idx, row) in rows.iter().enumerate().skip(scroll_offset) {
+        if y >= area_bottom {
             break;
         }
-        let row_area = Rect::new(area.x, y, area.width, 1);
-        let abs_idx = scroll_offset + i;
         let is_selected = abs_idx == selected;
-
-        draw_row(frame, row_area, row, is_selected);
+        let row_height = row_visual_height(row, area.width);
+        let available = area_bottom.saturating_sub(y);
+        let render_height = row_height.min(available);
+        let row_area = Rect::new(area.x, y, area.width, render_height);
+        draw_row(frame, row_area, row, is_selected, area.width);
+        y += row_height;
+        last_rendered_row = abs_idx;
     }
 
     // New messages below indicator
-    let visible_bottom = scroll_offset + visible_height;
-    if visible_bottom < total_rows {
-        let new_count = total_rows - visible_bottom;
+    if last_rendered_row + 1 < total_rows {
+        let new_count = total_rows - last_rendered_row - 1;
         let indicator = Paragraph::new(format!("v {} new", new_count)).style(
             Style::default()
                 .fg(s::accent())
@@ -164,14 +177,63 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
     }
 }
 
-fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool) {
+/// Compute how many terminal lines a row will occupy at the given width.
+fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
+    let RenderRow::Message {
+        indent,
+        author,
+        body,
+        timestamp,
+        reply_to_uuid,
+        is_pending,
+        ..
+    } = row
+    else {
+        return 1;
+    };
+    if width == 0 {
+        return 1;
+    }
+    let w = width as usize;
+    let indent_len = match indent {
+        0 => 0usize,
+        1 => 5,
+        _ => 9,
+    };
+    let reply_len = if reply_to_uuid.is_some() { 2usize } else { 0 };
+    let pending_len: usize = if *is_pending { " sending...".len() } else { 0 };
+    // prefix: indent + reply + author + "  "
+    let prefix_len = indent_len + reply_len + author.chars().count() + 2;
+    // suffix on first line: "  " + timestamp
+    let ts_len = 2 + timestamp.chars().count();
+    let body_len = body.chars().count() + pending_len;
+
+    // First line fits prefix + body_first + timestamp
+    let first_avail = w.saturating_sub(prefix_len + ts_len);
+    if body_len <= first_avail || first_avail == 0 {
+        return 1;
+    }
+    // Remaining body wraps with prefix padding
+    let remaining = body_len - first_avail;
+    let cont_avail = w.saturating_sub(prefix_len).max(1);
+    let cont_lines = remaining.div_ceil(cont_avail);
+    (1 + cont_lines).min(area_height_cap()) as u16
+}
+
+/// Cap maximum row height to avoid pathological cases.
+#[inline]
+fn area_height_cap() -> usize {
+    20
+}
+
+fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, avail_width: u16) {
     let bg = if is_selected {
         s::selection_bg()
     } else {
         s::BG
     };
 
-    let line = match row {
+    match row {
         RenderRow::Message {
             author,
             author_uuid,
@@ -197,11 +259,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool) {
             };
 
             let indent_str = build_indent(*indent);
-
-            // Show reply indicator if this is a reply-to a specific message
             let reply_prefix = if reply_to_uuid.is_some() { "↩ " } else { "" };
-
-            // Style own messages with a subtle indicator
             let name_style = if *is_mine {
                 Style::default()
                     .fg(s::accent())
@@ -212,49 +270,107 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool) {
                     .add_modifier(Modifier::BOLD)
             };
 
-            let mut spans = vec![
-                Span::styled(indent_str, Style::default().fg(s::dim())),
-                Span::styled(reply_prefix, Style::default().fg(s::dim())),
-                Span::styled(author.clone(), name_style),
-                Span::raw("  "),
-                Span::raw(body.clone()),
-                Span::raw("  "),
-                Span::styled(timestamp.clone(), Style::default().fg(s::dim())),
-            ];
-            if *is_pending {
-                spans.push(Span::styled(
-                    " sending...",
-                    Style::default()
-                        .fg(s::dim())
-                        .add_modifier(Modifier::ITALIC),
-                ));
+            let pending_suffix = if *is_pending { " sending..." } else { "" };
+            let full_body = format!("{}{}", body, pending_suffix);
+
+            // Compute layout widths
+            let w = avail_width as usize;
+            let indent_chars = indent_str.chars().count();
+            let reply_chars = reply_prefix.chars().count();
+            let author_chars = author.chars().count();
+            let prefix_len = indent_chars + reply_chars + author_chars + 2; // +2 for "  "
+            let ts_suffix = format!("  {}", timestamp);
+            let ts_len = ts_suffix.chars().count();
+            let body_chars: Vec<char> = full_body.chars().collect();
+            let first_avail = w.saturating_sub(prefix_len + ts_len);
+            let cont_avail = w.saturating_sub(prefix_len).max(1);
+
+            // Build lines: first line has prefix + body_chunk + timestamp,
+            // continuation lines have padding + body_chunk (aligned under body).
+            let padding = " ".repeat(prefix_len);
+            let mut lines: Vec<Line> = Vec::new();
+
+            if body_chars.len() <= first_avail || first_avail == 0 {
+                // Single line
+                let spans = vec![
+                    Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
+                    Span::styled(reply_prefix, Style::default().fg(s::dim())),
+                    Span::styled(author.clone(), name_style),
+                    Span::raw("  "),
+                    Span::raw(full_body.clone()),
+                    Span::styled(ts_suffix.clone(), Style::default().fg(s::dim())),
+                ];
+                lines.push(Line::from(spans).style(Style::default().bg(actual_bg)));
+            } else {
+                // Multi-line: first line
+                let first_chunk: String = body_chars[..first_avail].iter().collect();
+                let first_spans = vec![
+                    Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
+                    Span::styled(reply_prefix, Style::default().fg(s::dim())),
+                    Span::styled(author.clone(), name_style),
+                    Span::raw("  "),
+                    Span::raw(first_chunk),
+                ];
+                lines.push(Line::from(first_spans).style(Style::default().bg(actual_bg)));
+
+                // Continuation lines
+                let mut pos = first_avail;
+                while pos < body_chars.len() {
+                    let end = (pos + cont_avail).min(body_chars.len());
+                    let chunk: String = body_chars[pos..end].iter().collect();
+                    let is_last = end >= body_chars.len();
+                    let line = if is_last {
+                        Line::from(vec![
+                            Span::raw(padding.clone()),
+                            Span::raw(chunk),
+                            Span::styled(ts_suffix.clone(), Style::default().fg(s::dim())),
+                        ])
+                    } else {
+                        Line::from(vec![Span::raw(padding.clone()), Span::raw(chunk)])
+                    };
+                    lines.push(line.style(Style::default().bg(actual_bg)));
+                    pos = end;
+                }
             }
-            Line::from(spans).style(Style::default().bg(actual_bg))
+
+            frame.render_widget(
+                Paragraph::new(lines).style(Style::default().bg(actual_bg)),
+                area,
+            );
         }
         RenderRow::CollapsedThread {
             author,
             author_uuid,
+            is_mine,
             preview,
             reply_count,
             timestamp,
             ..
-        } => Line::from(vec![
-            Span::styled(
-                author.clone(),
-                Style::default()
-                    .fg(s::username_color(author_uuid))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::raw(preview.clone()),
-            Span::raw("  "),
-            Span::styled(
-                format!("[{} replies]", reply_count),
-                Style::default().fg(s::accent()),
-            ),
-            Span::raw("  "),
-            Span::styled(timestamp.clone(), Style::default().fg(s::dim())),
-        ]),
+        } => {
+            let author_color = if *is_mine {
+                s::accent()
+            } else {
+                s::username_color(author_uuid)
+            };
+            let line = Line::from(vec![
+                Span::styled(
+                    author.clone(),
+                    Style::default()
+                        .fg(author_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::raw(preview.clone()),
+                Span::raw("  "),
+                Span::styled(
+                    format!("[{} replies]", reply_count),
+                    Style::default().fg(s::accent()),
+                ),
+                Span::raw("  "),
+                Span::styled(timestamp.clone(), Style::default().fg(s::dim())),
+            ]);
+            frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), area);
+        }
         RenderRow::Input {
             thread_uuid,
             indent,
@@ -275,11 +391,10 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool) {
             } else {
                 spans.push(Span::styled("message...", Style::default().fg(s::dim())));
             }
-            Line::from(spans)
+            let line = Line::from(spans);
+            frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), area);
         }
-    };
-
-    frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), area);
+    }
 }
 
 fn build_indent(indent: u8) -> String {

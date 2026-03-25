@@ -41,6 +41,7 @@ pub struct Member {
 pub struct ChatSummary {
     pub uuid: String,
     pub topic: String,
+    pub description: Option<String>,
     pub member_count: usize,
 }
 
@@ -119,6 +120,8 @@ pub struct ContactsModalState {
     pub contacts: Vec<crate::storage::contacts::Contact>,
     pub selected: usize,
     pub filter: String,
+    /// Maps chat UUID -> topic name for display
+    pub chat_names: HashMap<String, String>,
 }
 
 impl ContactsModalState {
@@ -127,6 +130,7 @@ impl ContactsModalState {
             contacts,
             selected: 0,
             filter: String::new(),
+            chat_names: HashMap::new(),
         }
     }
 
@@ -419,7 +423,9 @@ impl AppState {
                 let uuid = uuid.clone();
                 self.msg_store.expanded.insert(uuid);
             }
-            Some(RenderRow::Message { uuid, thread_uuid, .. }) => {
+            Some(RenderRow::Message {
+                uuid, thread_uuid, ..
+            }) => {
                 // Use the thread root uuid as the input target.
                 // For top-level messages, that's the message itself.
                 // For replies, use their thread_uuid parent.
@@ -504,14 +510,8 @@ impl AppState {
         match chat.send_message(&text, thread_ref, reply_ref) {
             Ok(frame) => {
                 // Extract UUID and timestamp for optimistic display
-                let msg_uuid = frame.payload["uuid"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
-                let ts = frame.payload["ts"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
+                let msg_uuid = frame.payload["uuid"].as_str().unwrap_or("").to_string();
+                let ts = frame.payload["ts"].as_str().unwrap_or("").to_string();
 
                 let _ = self.ws_tx.send(frame.encode());
 
@@ -576,7 +576,10 @@ impl AppState {
         let topic = format!("chat:{}", chat.chat_uuid);
         let mut distributed = 0u32;
 
-        dlog!("rotate_and_distribute: {} total members", self.members.len());
+        dlog!(
+            "rotate_and_distribute: {} total members",
+            self.members.len()
+        );
         for member in &self.members {
             if member.uuid == my_uuid {
                 continue;
@@ -586,7 +589,11 @@ impl AppState {
             let peer_ed25519 = match chat.get_peer_ed25519(&member.uuid, true) {
                 Ok(k) => k,
                 Err(e) => {
-                    dlog!("rotate_and_distribute: get_peer_ed25519({}) FAILED: {}", member.uuid, e);
+                    dlog!(
+                        "rotate_and_distribute: get_peer_ed25519({}) FAILED: {}",
+                        member.uuid,
+                        e
+                    );
                     continue;
                 }
             };
@@ -652,16 +659,36 @@ impl AppState {
             None => return,
         };
 
-        // Collect all stored ciphertext messages from the SQLite store
+        // Collect all stored ciphertext messages from SQLite.
         let stored = chat.store.get_range(0, i64::MAX).unwrap_or_default();
-        let decrypted = crypto.decrypt_stored_messages(&stored);
 
-        // Update display messages with decrypted text
-        for (sender_str, plaintext) in decrypted {
-            for msg in self.msg_store.by_uuid.values_mut() {
-                if msg.sender_uuid == sender_str && msg.body.starts_with('<') {
-                    msg.body = plaintext.clone();
+        // Build a uuid -> plaintext map so each message is decrypted individually.
+        let mut decrypted_by_uuid: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for msg in &stored {
+            let uuid = match msg["uuid"].as_str() {
+                Some(u) => u.to_string(),
+                None => continue,
+            };
+            let sender_str = match msg["sender_uuid"].as_str() {
+                Some(s) => s,
+                None => continue,
+            };
+            let ct = match msg["ciphertext"].as_str() {
+                Some(c) => c,
+                None => continue,
+            };
+            if let Ok(sender_id) = Uuid::parse_str(sender_str) {
+                if let Ok(plaintext) = crypto.decrypt(&sender_id, ct) {
+                    decrypted_by_uuid.insert(uuid, plaintext);
                 }
+            }
+        }
+
+        // Update in-memory display messages by UUID (not by sender).
+        for (uuid, plaintext) in decrypted_by_uuid {
+            if let Some(msg) = self.msg_store.by_uuid.get_mut(&uuid) {
+                msg.body = plaintext;
             }
         }
     }
@@ -962,7 +989,10 @@ impl AppState {
                         self.redecrypt_stored_messages();
                     }
                 } else {
-                    dlog!("handle_frame({}) — no chat_channel to delegate to!", frame.event);
+                    dlog!(
+                        "handle_frame({}) — no chat_channel to delegate to!",
+                        frame.event
+                    );
                 }
                 // For sync:assign, build sync responses
                 if frame.event == "sync:assign" {
@@ -1101,7 +1131,12 @@ impl AppState {
         if let Some(members) = payload["members"].as_array() {
             for m in members {
                 let uuid_str = m["user_uuid"].as_str().unwrap_or("").to_string();
-                let screenname = m["screenname"].as_str().unwrap_or("?").to_string();
+                // Use our known screenname for ourselves rather than relying on server metadata.
+                let screenname = if uuid_str == self.my_uuid {
+                    self.my_screenname.clone()
+                } else {
+                    m["screenname"].as_str().unwrap_or("?").to_string()
+                };
                 self.name_cache.insert(uuid_str.clone(), screenname.clone());
                 if let (Ok(uuid), Some(ref cs)) = (uuid_str.parse::<Uuid>(), &self.contact_store) {
                     let _ = cs.upsert(uuid, &screenname, chat_uuid);
@@ -1141,11 +1176,15 @@ impl AppState {
         // Handle joins
         if let Some(joins) = payload["joins"].as_object() {
             for (uuid, meta) in joins {
-                let screenname = meta["metas"][0]["screenname"]
-                    .as_str()
-                    .or(meta["screenname"].as_str())
-                    .unwrap_or("?")
-                    .to_string();
+                let screenname = if uuid == &self.my_uuid {
+                    self.my_screenname.clone()
+                } else {
+                    meta["metas"][0]["screenname"]
+                        .as_str()
+                        .or(meta["screenname"].as_str())
+                        .unwrap_or("?")
+                        .to_string()
+                };
                 self.name_cache.insert(uuid.clone(), screenname.clone());
                 if let Some(existing) = self.members.iter_mut().find(|m| &m.uuid == uuid) {
                     existing.online = true;
@@ -1168,14 +1207,20 @@ impl AppState {
 
         // Proactively distribute keys to newly joined members
         if !new_joins.is_empty() {
-            dlog!("presence_diff: {} new join(s): {:?}", new_joins.len(), new_joins);
+            dlog!(
+                "presence_diff: {} new join(s): {:?}",
+                new_joins.len(),
+                new_joins
+            );
             if let Some(ref chat) = self.chat_channel {
                 if chat.crypto.is_some() {
                     for uuid in &new_joins {
                         dlog!("presence_diff: distributing keys to new member {}", uuid);
                         match chat.get_peer_ed25519(uuid, true) {
                             Ok(peer_ed25519) => {
-                                match crate::crypto::identity::ed25519_to_x25519_public(&peer_ed25519) {
+                                match crate::crypto::identity::ed25519_to_x25519_public(
+                                    &peer_ed25519,
+                                ) {
                                     Some(peer_x25519) => {
                                         if let Some(ref crypto) = chat.crypto {
                                             match crypto.prepare_key_bundle(&peer_x25519, true) {
@@ -1193,10 +1238,15 @@ impl AppState {
                                             dlog!("presence_diff: crypto vanished mid-loop?!");
                                         }
                                     }
-                                    None => dlog!("presence_diff: ed25519_to_x25519 returned None for {}", uuid),
+                                    None => dlog!(
+                                        "presence_diff: ed25519_to_x25519 returned None for {}",
+                                        uuid
+                                    ),
                                 }
                             }
-                            Err(e) => dlog!("presence_diff: get_peer_ed25519({}) FAILED: {}", uuid, e),
+                            Err(e) => {
+                                dlog!("presence_diff: get_peer_ed25519({}) FAILED: {}", uuid, e)
+                            }
                         }
                     }
                 } else {
@@ -1247,6 +1297,7 @@ impl AppState {
             self.chat_list.push(ChatSummary {
                 uuid: inv.chat_uuid.clone(),
                 topic: inv.topic,
+                description: None,
                 member_count: 0,
             });
             self.join_chat(inv.chat_uuid);
@@ -1285,9 +1336,27 @@ impl AppState {
         self.build_render_rows().len()
     }
 
-    /// Build the flat render row list from the current message store
+    /// Build the flat render row list from the current message store using the active pane.
     pub fn build_render_rows(&self) -> Vec<RenderRow> {
+        let pane = self.active_pane().clone();
+        self.build_render_rows_for_pane(&pane)
+    }
+
+    /// Build the flat render row list using a specific pane's editing/input state.
+    /// This allows each pane to render its own independent editing state.
+    pub fn build_render_rows_for_pane(&self, pane: &Pane) -> Vec<RenderRow> {
         let mut rows = Vec::new();
+
+        let display_name = |sender_uuid: &str, fallback: &str| -> String {
+            if sender_uuid == self.my_uuid {
+                "me".to_string()
+            } else {
+                self.name_cache
+                    .get(sender_uuid)
+                    .cloned()
+                    .unwrap_or_else(|| fallback.to_string())
+            }
+        };
 
         for top_uuid in &self.msg_store.top_level {
             let msg = match self.msg_store.by_uuid.get(top_uuid) {
@@ -1303,8 +1372,9 @@ impl AppState {
                 let preview: String = msg.body.chars().take(40).collect();
                 rows.push(RenderRow::CollapsedThread {
                     uuid: top_uuid.clone(),
-                    author: msg.sender_name.clone(),
+                    author: display_name(&msg.sender_uuid, &msg.sender_name),
                     author_uuid: msg.sender_uuid.clone(),
+                    is_mine: msg.sender_uuid == self.my_uuid,
                     preview,
                     reply_count,
                     timestamp: format_timestamp(&msg.timestamp),
@@ -1312,7 +1382,7 @@ impl AppState {
             } else {
                 rows.push(RenderRow::Message {
                     uuid: top_uuid.clone(),
-                    author: msg.sender_name.clone(),
+                    author: display_name(&msg.sender_uuid, &msg.sender_name),
                     author_uuid: msg.sender_uuid.clone(),
                     body: msg.body.clone(),
                     timestamp: format_timestamp(&msg.timestamp),
@@ -1339,7 +1409,7 @@ impl AppState {
                         };
                         rows.push(RenderRow::Message {
                             uuid: reply_uuid.clone(),
-                            author: reply.sender_name.clone(),
+                            author: display_name(&reply.sender_uuid, &reply.sender_name),
                             author_uuid: reply.sender_uuid.clone(),
                             body: reply.body.clone(),
                             timestamp: format_timestamp(&reply.timestamp),
@@ -1352,7 +1422,6 @@ impl AppState {
                         });
                     }
                     // Thread input prompt
-                    let pane = self.active_pane();
                     let thread_input_target = InputTarget::Thread(top_uuid.clone());
                     let is_editing = pane.editing.as_ref() == Some(&thread_input_target);
                     rows.push(RenderRow::Input {
@@ -1370,13 +1439,12 @@ impl AppState {
         }
 
         // Main chat input at bottom
-        let is_editing_main = self.active_pane().editing.as_ref() == Some(&InputTarget::MainChat);
+        let is_editing_main = pane.editing.as_ref() == Some(&InputTarget::MainChat);
         rows.push(RenderRow::Input {
             thread_uuid: None,
             indent: 0,
             is_active: is_editing_main,
-            content: self
-                .active_pane()
+            content: pane
                 .inputs
                 .get(&InputTarget::MainChat)
                 .cloned()
@@ -1388,8 +1456,13 @@ impl AppState {
 }
 
 fn format_timestamp(ts: &str) -> String {
+    use chrono::{DateTime, Local};
+    if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
+        return dt.with_timezone(&Local).format("%H:%M").to_string();
+    }
+    // Fallback: extract HH:MM directly from ISO 8601 string (UTC)
     if ts.len() >= 16 {
-        ts[11..16].to_string() // HH:MM from ISO 8601
+        ts[11..16].to_string()
     } else {
         ts.to_string()
     }
@@ -1414,6 +1487,7 @@ pub enum RenderRow {
         uuid: String,
         author: String,
         author_uuid: String,
+        is_mine: bool,
         preview: String,
         reply_count: u32,
         timestamp: String,

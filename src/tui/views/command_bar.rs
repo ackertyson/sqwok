@@ -148,7 +148,8 @@ pub fn draw(frame: &mut Frame, state: &CommandBarState) {
 
     let bar_y = area.height.saturating_sub(bar_height);
 
-    // Suggestion list
+    // Suggestion list — fill full width with background so underlying content doesn't show through
+    let overlay_bg = ratatui::style::Color::Rgb(15, 15, 25);
     for (i, suggestion) in state
         .suggestions
         .iter()
@@ -162,15 +163,20 @@ pub fn draw(frame: &mut Frame, state: &CommandBarState) {
         let style = if i == state.selected_suggestion {
             Style::default().bg(s::selection_bg()).fg(s::fg())
         } else {
-            Style::default().fg(s::dim())
+            Style::default().bg(overlay_bg).fg(s::dim())
         };
         let line = Line::from(vec![
+            Span::styled(" ", style),
             Span::styled(suggestion.label.clone(), style.add_modifier(Modifier::BOLD)),
             Span::styled(format!("  {}", suggestion.description), style),
         ]);
         frame.render_widget(
-            Paragraph::new(line),
-            Rect::new(1, y, area.width.saturating_sub(2), 1),
+            Paragraph::new(line).style(Style::default().bg(if i == state.selected_suggestion {
+                s::selection_bg()
+            } else {
+                overlay_bg
+            })),
+            Rect::new(0, y, area.width, 1),
         );
     }
 
@@ -183,7 +189,14 @@ pub fn draw(frame: &mut Frame, state: &CommandBarState) {
                 .fg(s::accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(state.input.clone()),
+        Span::styled(
+            state.input.split_whitespace().next().unwrap_or("").to_string(),
+            Style::default().fg(s::accent()).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            state.input.find(' ').map(|i| &state.input[i..]).unwrap_or("").to_string(),
+            Style::default().fg(s::fg()),
+        ),
         Span::styled("█", Style::default().fg(s::accent())),
     ]);
     frame.render_widget(

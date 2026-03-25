@@ -98,7 +98,7 @@ pub async fn run_with_reconnect(
                                 break;
                             }
                             // Send a WebSocket ping
-                            if write.send(Message::Ping(vec![].into())).await.is_err() {
+                            if write.send(Message::Ping(vec![])).await.is_err() {
                                 break;
                             }
                             awaiting_pong = true;

@@ -151,12 +151,21 @@ fn handle_chat(app: &mut AppState, event: CtEvent) -> Action {
 fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
     match event {
         CtEvent::Key(key) => match key.code {
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => Action::Quit,
             KeyCode::Enter => {
                 app.send_current_input();
                 Action::Continue
             }
             KeyCode::Esc => {
                 app.active_pane_mut().editing = None;
+                Action::Continue
+            }
+            KeyCode::Up => {
+                app.move_selection(-1);
+                Action::Continue
+            }
+            KeyCode::Down => {
+                app.move_selection(1);
                 Action::Continue
             }
             KeyCode::Char(c)
@@ -198,13 +207,27 @@ fn handle_command_bar(app: &mut AppState, event: CtEvent) -> Action {
                 }
                 Action::Continue
             }
-            KeyCode::Down | KeyCode::Tab => {
+            KeyCode::Down => {
                 if let Some(ref mut bar) = app.command_bar {
                     bar.select_next();
                 }
                 Action::Continue
             }
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
+            KeyCode::Tab => {
+                if let Some(ref mut bar) = app.command_bar {
+                    bar.select_next();
+                    // Complete the input text to the selected suggestion so
+                    // the user can see exactly what Enter will run.
+                    if let Some(suggestion) = bar.suggestions.get(bar.selected_suggestion) {
+                        bar.input = suggestion.label.trim_start_matches('/').to_string();
+                    }
+                }
+                Action::Continue
+            }
+            KeyCode::Char(c)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 // Take the bar out temporarily to avoid borrow conflict with update_suggestions
                 if let Some(mut bar) = app.command_bar.take() {
                     bar.input.push(c);
@@ -343,7 +366,13 @@ fn execute_command(app: &mut AppState, action: CommandAction) -> Action {
                 .as_ref()
                 .and_then(|cs| cs.all(100).ok())
                 .unwrap_or_default();
-            app.contacts_modal = Some(ContactsModalState::new(contacts));
+            let mut modal = ContactsModalState::new(contacts);
+            modal.chat_names = app
+                .chat_list
+                .iter()
+                .map(|c| (c.uuid.clone(), c.topic.clone()))
+                .collect();
+            app.contacts_modal = Some(modal);
             app.modal = Some(ModalKind::Contacts);
             Action::Continue
         }

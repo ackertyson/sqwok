@@ -117,20 +117,6 @@ impl ChatCrypto {
     pub fn identity(&self) -> &E2eIdentity {
         &self.identity
     }
-
-    /// Decrypt all stored messages from the keychain (called after receiving keys).
-    pub fn decrypt_stored_messages(&self, messages: &[serde_json::Value]) -> Vec<(String, String)> {
-        messages
-            .iter()
-            .filter_map(|msg| {
-                let sender = msg["sender_uuid"].as_str()?;
-                let ct = msg["ciphertext"].as_str()?;
-                let uuid = Uuid::parse_str(sender).ok()?;
-                let text = self.decrypt(&uuid, ct).ok()?;
-                Some((sender.to_string(), text))
-            })
-            .collect()
-    }
 }
 
 /// Parse a key:distribute wire payload into an EncryptedKeyBundle.

@@ -1,6 +1,6 @@
+use crate::dlog;
 use anyhow::Result;
 use base64::Engine;
-use crate::dlog;
 use ed25519_dalek::VerifyingKey;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -112,7 +112,10 @@ impl ChatChannel {
     }
 
     pub fn ack_frame(&self) -> Frame {
-        self.frame("msg:ack", serde_json::json!({"through_seq": self.high_water}))
+        self.frame(
+            "msg:ack",
+            serde_json::json!({"through_seq": self.high_water}),
+        )
     }
 
     pub fn sync_request_frame(&self) -> Frame {
@@ -242,7 +245,11 @@ impl ChatChannel {
         let sender_ed25519 = match self.get_peer_ed25519(&sender_id, false) {
             Ok(k) => k,
             Err(e) => {
-                dlog!("key:distribute get_peer_ed25519({}) FAILED: {}", sender_id, e);
+                dlog!(
+                    "key:distribute get_peer_ed25519({}) FAILED: {}",
+                    sender_id,
+                    e
+                );
                 return Err(e);
             }
         };
@@ -291,7 +298,11 @@ impl ChatChannel {
                 k
             }
             Err(e) => {
-                dlog!("key:request — get_peer_ed25519({}) FAILED: {}", requester_id, e);
+                dlog!(
+                    "key:request — get_peer_ed25519({}) FAILED: {}",
+                    requester_id,
+                    e
+                );
                 return Err(e);
             }
         };
@@ -301,7 +312,10 @@ impl ChatChannel {
         let bundle = crypto.prepare_key_bundle(&requester_x25519, true)?;
         let wire_payload = bundle_to_wire_payload(&bundle, requester_id);
 
-        dlog!("key:request — responding with key:distribute to {}", requester_id);
+        dlog!(
+            "key:request — responding with key:distribute to {}",
+            requester_id
+        );
         Ok(Some(self.frame("key:distribute", wire_payload)))
     }
 
@@ -329,7 +343,11 @@ impl ChatChannel {
         }
 
         let url = format!("{}/api/users/{}/e2e_key", self.server_url, user_uuid);
-        dlog!("get_peer_ed25519({}) — fetching from server (force_refresh={})", user_uuid, force_refresh);
+        dlog!(
+            "get_peer_ed25519({}) — fetching from server (force_refresh={})",
+            user_uuid,
+            force_refresh
+        );
         let token = crate::auth::token::build_token(&self.identity_dir, &self.server_url)?;
 
         let resp: serde_json::Value = tokio::task::block_in_place(|| {
@@ -342,7 +360,11 @@ impl ChatChannel {
                 .map_err(|e| anyhow::anyhow!("JSON parse failed: {}", e))
         })?;
 
-        dlog!("get_peer_ed25519({}) — server response: {}", user_uuid, resp);
+        dlog!(
+            "get_peer_ed25519({}) — server response: {}",
+            user_uuid,
+            resp
+        );
 
         let key_b64 = resp["e2e_public_key"]
             .as_str()
@@ -350,7 +372,11 @@ impl ChatChannel {
         let key_bytes = base64::engine::general_purpose::STANDARD.decode(key_b64)?;
 
         self.store.store_peer_key(user_uuid, &key_bytes)?;
-        dlog!("get_peer_ed25519({}) — stored in cache, {} bytes", user_uuid, key_bytes.len());
+        dlog!(
+            "get_peer_ed25519({}) — stored in cache, {} bytes",
+            user_uuid,
+            key_bytes.len()
+        );
 
         let arr: [u8; 32] = key_bytes
             .try_into()

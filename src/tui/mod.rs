@@ -184,6 +184,7 @@ pub async fn run(
                         } else {
                             topic
                         },
+                        description: None,
                         member_count: 0,
                     });
                 }
