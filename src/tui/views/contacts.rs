@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -23,12 +23,10 @@ pub fn draw(frame: &mut Frame, state: &ContactsModalState) {
             .split(area);
 
         // Filter input
-        let input_line = Line::from(vec![
-            Span::styled("Filter: ", Style::default().fg(s::dim())),
-            Span::styled(&state.filter, Style::default().fg(s::fg())),
-            Span::styled("█", Style::default().fg(s::accent())),
-        ]);
-        frame.render_widget(Paragraph::new(input_line), chunks[0]);
+        frame.render_widget(
+            Paragraph::new(s::input_line("Filter: ", &state.filter)),
+            chunks[0],
+        );
 
         // Hint
         frame.render_widget(
@@ -56,16 +54,9 @@ pub fn draw(frame: &mut Frame, state: &ContactsModalState) {
                 .enumerate()
                 .map(|(i, c)| {
                     let selected = i == state.selected;
-                    let style = if selected {
-                        Style::default()
-                            .bg(s::selection_bg())
-                            .fg(s::fg())
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(s::fg())
-                    };
+                    let style = s::selected_style(selected);
                     let marker = if selected { "► " } else { "  " };
-                    let ago = format_time_ago(c.updated_at);
+                    let ago = s::format_time_ago(c.updated_at);
                     let chat_hint = c
                         .last_seen_chat
                         .map(|u| {
@@ -91,20 +82,6 @@ pub fn draw(frame: &mut Frame, state: &ContactsModalState) {
             frame.render_widget(Paragraph::new(lines), chunks[2]);
         }
     });
-}
-
-fn format_time_ago(unix_ts: i64) -> String {
-    let now = chrono::Utc::now().timestamp();
-    let diff = now - unix_ts;
-    if diff < 60 {
-        "just now".to_string()
-    } else if diff < 3600 {
-        format!("{}m ago", diff / 60)
-    } else if diff < 86400 {
-        format!("{}h ago", diff / 3600)
-    } else {
-        format!("{}d ago", diff / 86400)
-    }
 }
 
 pub enum ContactsAction {

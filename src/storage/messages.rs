@@ -6,6 +6,20 @@ pub struct MessageStore {
     conn: Connection,
 }
 
+fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<Value> {
+    Ok(serde_json::json!({
+        "uuid": row.get::<_, String>(0)?,
+        "sender_uuid": row.get::<_, String>(1)?,
+        "thread_uuid": row.get::<_, Option<String>>(2)?,
+        "reply_to_uuid": row.get::<_, Option<String>>(3)?,
+        "global_seq": row.get::<_, i64>(4)?,
+        "key_epoch": row.get::<_, i64>(5)?,
+        "ciphertext": row.get::<_, String>(6)?,
+        "ts": row.get::<_, String>(7)?,
+        "server_ts": row.get::<_, String>(8)?,
+    }))
+}
+
 impl MessageStore {
     #[cfg(test)]
     pub fn from_connection(conn: Connection) -> Self {
@@ -84,25 +98,8 @@ impl MessageStore {
              ORDER BY global_seq",
         )?;
 
-        let rows = stmt.query_map(params![from_seq, to_seq], |row| {
-            Ok(serde_json::json!({
-                "uuid": row.get::<_, String>(0)?,
-                "sender_uuid": row.get::<_, String>(1)?,
-                "thread_uuid": row.get::<_, Option<String>>(2)?,
-                "reply_to_uuid": row.get::<_, Option<String>>(3)?,
-                "global_seq": row.get::<_, i64>(4)?,
-                "key_epoch": row.get::<_, i64>(5)?,
-                "ciphertext": row.get::<_, String>(6)?,
-                "ts": row.get::<_, String>(7)?,
-                "server_ts": row.get::<_, String>(8)?,
-            }))
-        })?;
-
-        let mut messages = Vec::new();
-        for row in rows {
-            messages.push(row?);
-        }
-        Ok(messages)
+        let rows = stmt.query_map(params![from_seq, to_seq], row_to_json)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn get_peer_key(&self, user_uuid: &str) -> Result<Option<Vec<u8>>> {
@@ -140,19 +137,7 @@ impl MessageStore {
              LIMIT ?1",
         )?;
 
-        let rows = stmt.query_map(params![limit], |row| {
-            Ok(serde_json::json!({
-                "uuid": row.get::<_, String>(0)?,
-                "sender_uuid": row.get::<_, String>(1)?,
-                "thread_uuid": row.get::<_, Option<String>>(2)?,
-                "reply_to_uuid": row.get::<_, Option<String>>(3)?,
-                "global_seq": row.get::<_, i64>(4)?,
-                "key_epoch": row.get::<_, i64>(5)?,
-                "ciphertext": row.get::<_, String>(6)?,
-                "ts": row.get::<_, String>(7)?,
-                "server_ts": row.get::<_, String>(8)?,
-            }))
-        })?;
+        let rows = stmt.query_map(params![limit], row_to_json)?;
 
         let mut messages: Vec<Value> = rows.filter_map(|r| r.ok()).collect();
         messages.reverse();
@@ -181,19 +166,7 @@ impl MessageStore {
              LIMIT ?2",
         )?;
 
-        let rows = stmt.query_map(params![before_seq, limit], |row| {
-            Ok(serde_json::json!({
-                "uuid": row.get::<_, String>(0)?,
-                "sender_uuid": row.get::<_, String>(1)?,
-                "thread_uuid": row.get::<_, Option<String>>(2)?,
-                "reply_to_uuid": row.get::<_, Option<String>>(3)?,
-                "global_seq": row.get::<_, i64>(4)?,
-                "key_epoch": row.get::<_, i64>(5)?,
-                "ciphertext": row.get::<_, String>(6)?,
-                "ts": row.get::<_, String>(7)?,
-                "server_ts": row.get::<_, String>(8)?,
-            }))
-        })?;
+        let rows = stmt.query_map(params![before_seq, limit], row_to_json)?;
 
         let mut messages: Vec<Value> = rows.filter_map(|r| r.ok()).collect();
         messages.reverse();
@@ -230,19 +203,7 @@ impl MessageStore {
             .iter()
             .map(|s| s as &dyn rusqlite::types::ToSql)
             .collect();
-        let rows = stmt.query_map(params.as_slice(), |row| {
-            Ok(serde_json::json!({
-                "uuid": row.get::<_, String>(0)?,
-                "sender_uuid": row.get::<_, String>(1)?,
-                "thread_uuid": row.get::<_, Option<String>>(2)?,
-                "reply_to_uuid": row.get::<_, Option<String>>(3)?,
-                "global_seq": row.get::<_, i64>(4)?,
-                "key_epoch": row.get::<_, i64>(5)?,
-                "ciphertext": row.get::<_, String>(6)?,
-                "ts": row.get::<_, String>(7)?,
-                "server_ts": row.get::<_, String>(8)?,
-            }))
-        })?;
+        let rows = stmt.query_map(params.as_slice(), row_to_json)?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 }

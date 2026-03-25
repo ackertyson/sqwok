@@ -23,7 +23,7 @@ pub fn draw_modal_frame(frame: &mut Frame, title: &str, content_fn: impl FnOnce(
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(s::accent()))
-        .style(Style::default().bg(ratatui::style::Color::Rgb(20, 20, 30)));
+        .style(Style::default().bg(s::modal_bg()));
 
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);

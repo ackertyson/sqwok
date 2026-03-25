@@ -102,6 +102,64 @@ pub fn shortcut_key_color() -> Color {
     color((180, 220, 140), 149)
 }
 
+#[inline]
+pub fn warning_color() -> Color {
+    color((230, 180, 80), 214)
+}
+#[inline]
+pub fn overlay_bg() -> Color {
+    color((15, 15, 25), 233)
+}
+#[inline]
+pub fn modal_bg() -> Color {
+    color((20, 20, 30), 234)
+}
+#[inline]
+pub fn error_bg() -> Color {
+    color((40, 15, 15), 52)
+}
+
+/// Style for selected vs unselected items in list views.
+pub fn selected_style(is_selected: bool) -> ratatui::style::Style {
+    use ratatui::style::{Modifier, Style};
+    if is_selected {
+        Style::default()
+            .bg(selection_bg())
+            .fg(fg())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(fg())
+    }
+}
+
+/// Format a unix timestamp as a relative time string (e.g. "just now", "5m ago").
+pub fn format_time_ago(unix_ts: i64) -> String {
+    let now = chrono::Utc::now().timestamp();
+    let diff = now - unix_ts;
+    if diff < 60 {
+        "just now".to_string()
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else {
+        format!("{}d ago", diff / 86400)
+    }
+}
+
+/// Build a modal input line with label, current text, and cursor block.
+pub fn input_line<'a>(label: &str, text: &str) -> ratatui::text::Line<'a> {
+    use ratatui::{
+        style::Style,
+        text::{Line, Span},
+    };
+    Line::from(vec![
+        Span::styled(label.to_string(), Style::default().fg(dim())),
+        Span::styled(text.to_string(), Style::default().fg(fg())),
+        Span::styled("█".to_string(), Style::default().fg(accent())),
+    ])
+}
+
 // ── Hint bar helper ──────────────────────────────────────────────────────────
 
 /// Build a colorized hint bar `Line` from a slice of (key, label) pairs.

@@ -29,11 +29,6 @@ impl Pane {
         }
     }
 
-    /// Return a snapshot clone for rendering (avoids borrow conflicts).
-    pub fn clone_snapshot(&self) -> Pane {
-        self.clone()
-    }
-
     pub fn current_input(&self) -> &str {
         if let Some(ref target) = self.editing {
             self.inputs.get(target).map(|s| s.as_str()).unwrap_or("")
@@ -43,14 +38,14 @@ impl Pane {
     }
 
     pub fn push_char(&mut self, c: char) {
-        if let Some(ref target) = self.editing.clone() {
-            self.inputs.entry(target.clone()).or_default().push(c);
+        if let Some(target) = self.editing.clone() {
+            self.inputs.entry(target).or_default().push(c);
         }
     }
 
     pub fn pop_char(&mut self) {
-        if let Some(ref target) = self.editing.clone() {
-            if let Some(s) = self.inputs.get_mut(target) {
+        if let Some(target) = self.editing.clone() {
+            if let Some(s) = self.inputs.get_mut(&target) {
                 s.pop();
             }
         }

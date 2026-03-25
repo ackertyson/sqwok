@@ -44,11 +44,6 @@ impl CommandBarState {
         }
     }
 
-    /// Clone a snapshot for drawing (avoids borrow conflicts).
-    pub fn clone_for_draw(&self) -> CommandBarState {
-        self.clone()
-    }
-
     pub fn update_suggestions(&mut self, app: &AppState) {
         let input = self.input.to_lowercase();
         let mut suggestions = Vec::new();
@@ -149,7 +144,7 @@ pub fn draw(frame: &mut Frame, state: &CommandBarState) {
     let bar_y = area.height.saturating_sub(bar_height);
 
     // Suggestion list — fill full width with background so underlying content doesn't show through
-    let overlay_bg = ratatui::style::Color::Rgb(15, 15, 25);
+    let overlay_bg = s::overlay_bg();
     for (i, suggestion) in state
         .suggestions
         .iter()
@@ -212,8 +207,7 @@ pub fn draw(frame: &mut Frame, state: &CommandBarState) {
         Span::styled("█", Style::default().fg(s::accent())),
     ]);
     frame.render_widget(
-        Paragraph::new(input_line)
-            .style(Style::default().bg(ratatui::style::Color::Rgb(15, 15, 25))),
+        Paragraph::new(input_line).style(Style::default().bg(s::overlay_bg())),
         input_area,
     );
 }

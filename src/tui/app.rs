@@ -349,6 +349,13 @@ impl AppState {
         &mut self.panes[self.active_pane]
     }
 
+    fn show_toast(&mut self, msg: impl Into<String>, secs: u64) {
+        self.toast = Some((
+            msg.into(),
+            Instant::now() + std::time::Duration::from_secs(secs),
+        ));
+    }
+
     pub fn move_selection(&mut self, delta: i32) {
         let rows = self.build_render_rows();
         let row_count = rows.len();
@@ -545,10 +552,7 @@ impl AppState {
     pub fn send_current_input(&mut self) {
         // Block sends while disconnected
         if !matches!(self.connection_status, ConnStatus::Connected) {
-            self.toast = Some((
-                "Cannot send: not connected".to_string(),
-                Instant::now() + std::time::Duration::from_secs(3),
-            ));
+            self.show_toast("Cannot send: not connected", 3);
             return;
         }
 
@@ -607,7 +611,7 @@ impl AppState {
                 }
             }
             Err(e) => {
-                eprintln!("send error: {}", e);
+                dlog!("send error: {}", e);
             }
         }
     }
@@ -622,10 +626,7 @@ impl AppState {
         let crypto = match &mut chat.crypto {
             Some(c) => c,
             None => {
-                self.toast = Some((
-                    "Cannot rotate: no encryption keys".to_string(),
-                    Instant::now() + std::time::Duration::from_secs(3),
-                ));
+                self.show_toast("Cannot rotate: no encryption keys", 3);
                 return;
             }
         };
@@ -633,10 +634,7 @@ impl AppState {
         let new_epoch = match crypto.rotate_key() {
             Ok(e) => e,
             Err(e) => {
-                self.toast = Some((
-                    format!("Key rotation failed: {}", e),
-                    Instant::now() + std::time::Duration::from_secs(4),
-                ));
+                self.show_toast(format!("Key rotation failed: {}", e), 4);
                 return;
             }
         };
@@ -684,13 +682,13 @@ impl AppState {
             }
         }
 
-        self.toast = Some((
+        self.show_toast(
             format!(
                 "Keys rotated to epoch {} — distributed to {} member(s)",
                 new_epoch, distributed
             ),
-            Instant::now() + std::time::Duration::from_secs(4),
-        ));
+            4,
+        );
     }
 
     /// Returns our E2E key fingerprint (hex of Ed25519 + X25519 public key prefixes + epoch).
@@ -763,6 +761,59 @@ impl AppState {
         }
     }
 
+    /// Parse a JSON message payload into a DisplayMessage, handling decryption
+    /// and sender name resolution.
+    fn parse_message_payload(&self, payload: &serde_json::Value) -> DisplayMessage {
+        let uuid = payload["uuid"].as_str().unwrap_or("").to_string();
+        let sender_uuid = payload["sender_uuid"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+        let global_seq = payload["global_seq"].as_i64().unwrap_or(0);
+        let thread_uuid = payload["thread_uuid"].as_str().map(|s| s.to_string());
+        let reply_to_uuid = payload["reply_to_uuid"].as_str().map(|s| s.to_string());
+        let timestamp = payload["ts"]
+            .as_str()
+            .or(payload["client_ts"].as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let body = if let Some(ref ch) = self.chat_channel {
+            if let Some(ref crypto) = ch.crypto {
+                if let Ok(sender_id) = Uuid::parse_str(&sender_uuid) {
+                    let ciphertext = payload["ciphertext"].as_str().unwrap_or("");
+                    crypto
+                        .decrypt(&sender_id, ciphertext)
+                        .unwrap_or_else(|_| "<decrypt failed>".to_string())
+                } else {
+                    "<invalid sender>".to_string()
+                }
+            } else {
+                "<awaiting keys>".to_string()
+            }
+        } else {
+            "<no channel>".to_string()
+        };
+
+        let sender_name = self
+            .name_cache
+            .get(&sender_uuid)
+            .cloned()
+            .unwrap_or_else(|| sender_uuid.chars().take(8).collect());
+
+        DisplayMessage {
+            uuid,
+            sender_uuid,
+            sender_name,
+            body,
+            timestamp,
+            global_seq,
+            thread_uuid,
+            reply_to_uuid,
+            pending: false,
+        }
+    }
+
     /// Load older messages from SQLite into the in-memory store (scrollback).
     pub fn load_scrollback(&mut self) {
         if !self.msg_store.has_more_above {
@@ -786,56 +837,7 @@ impl AppState {
         }
 
         for payload in &older {
-            let uuid = payload["uuid"].as_str().unwrap_or("").to_string();
-            let sender_uuid = payload["sender_uuid"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
-            let global_seq = payload["global_seq"].as_i64().unwrap_or(0);
-            let thread_uuid = payload["thread_uuid"].as_str().map(|s| s.to_string());
-            let reply_to_uuid = payload["reply_to_uuid"].as_str().map(|s| s.to_string());
-            let timestamp = payload["ts"]
-                .as_str()
-                .or(payload["client_ts"].as_str())
-                .unwrap_or("")
-                .to_string();
-
-            // Decrypt
-            let body = if let Some(ref ch) = self.chat_channel {
-                if let Some(ref crypto) = ch.crypto {
-                    if let Ok(sender_id) = Uuid::parse_str(&sender_uuid) {
-                        let ciphertext = payload["ciphertext"].as_str().unwrap_or("");
-                        crypto
-                            .decrypt(&sender_id, ciphertext)
-                            .unwrap_or_else(|_| "<decrypt failed>".to_string())
-                    } else {
-                        "<invalid sender>".to_string()
-                    }
-                } else {
-                    "<awaiting keys>".to_string()
-                }
-            } else {
-                "<no channel>".to_string()
-            };
-
-            let sender_name = self
-                .name_cache
-                .get(&sender_uuid)
-                .cloned()
-                .unwrap_or_else(|| sender_uuid.chars().take(8).collect());
-
-            let msg = DisplayMessage {
-                uuid,
-                sender_uuid,
-                sender_name,
-                body,
-                timestamp,
-                global_seq,
-                thread_uuid,
-                reply_to_uuid,
-                pending: false,
-            };
-
+            let msg = self.parse_message_payload(payload);
             self.msg_store.insert(msg);
         }
     }
@@ -858,55 +860,7 @@ impl AppState {
         }
 
         for payload in &recent {
-            let uuid = payload["uuid"].as_str().unwrap_or("").to_string();
-            let sender_uuid = payload["sender_uuid"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
-            let global_seq = payload["global_seq"].as_i64().unwrap_or(0);
-            let thread_uuid = payload["thread_uuid"].as_str().map(|s| s.to_string());
-            let reply_to_uuid = payload["reply_to_uuid"].as_str().map(|s| s.to_string());
-            let timestamp = payload["ts"]
-                .as_str()
-                .or(payload["client_ts"].as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let body = if let Some(ref ch) = self.chat_channel {
-                if let Some(ref crypto) = ch.crypto {
-                    if let Ok(sender_id) = Uuid::parse_str(&sender_uuid) {
-                        let ciphertext = payload["ciphertext"].as_str().unwrap_or("");
-                        crypto
-                            .decrypt(&sender_id, ciphertext)
-                            .unwrap_or_else(|_| "<decrypt failed>".to_string())
-                    } else {
-                        "<invalid sender>".to_string()
-                    }
-                } else {
-                    "<awaiting keys>".to_string()
-                }
-            } else {
-                "<no channel>".to_string()
-            };
-
-            let sender_name = self
-                .name_cache
-                .get(&sender_uuid)
-                .cloned()
-                .unwrap_or_else(|| sender_uuid.chars().take(8).collect());
-
-            let msg = DisplayMessage {
-                uuid,
-                sender_uuid,
-                sender_name,
-                body,
-                timestamp,
-                global_seq,
-                thread_uuid,
-                reply_to_uuid,
-                pending: false,
-            };
-
+            let msg = self.parse_message_payload(payload);
             self.msg_store.insert(msg);
         }
     }
@@ -915,10 +869,7 @@ impl AppState {
         let chat_dir = match crate::config::chat_dir(&chat_uuid) {
             Ok(d) => d,
             Err(e) => {
-                self.toast = Some((
-                    format!("Cannot determine data dir: {}", e),
-                    Instant::now() + std::time::Duration::from_secs(4),
-                ));
+                self.show_toast(format!("Cannot determine data dir: {}", e), 4);
                 return;
             }
         };
@@ -927,7 +878,7 @@ impl AppState {
         let store = match SqlMessageStore::open(&chat_uuid) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Cannot open message store: {}", e);
+                dlog!("Cannot open message store: {}", e);
                 return;
             }
         };
@@ -1011,10 +962,7 @@ impl AppState {
                     .to_string();
                 if removed_uuid == self.my_uuid {
                     // We were removed from this chat
-                    self.toast = Some((
-                        "You were removed from this chat".to_string(),
-                        Instant::now() + std::time::Duration::from_secs(5),
-                    ));
+                    self.show_toast("You were removed from this chat", 5);
                     self.current_chat = None;
                     self.chat_channel = None;
                     self.msg_store.clear();
@@ -1028,10 +976,7 @@ impl AppState {
                         .get(&removed_uuid)
                         .cloned()
                         .unwrap_or_else(|| removed_uuid.chars().take(8).collect());
-                    self.toast = Some((
-                        format!("{} was removed — rotating keys", name),
-                        Instant::now() + std::time::Duration::from_secs(4),
-                    ));
+                    self.show_toast(format!("{} was removed — rotating keys", name), 4);
                     self.rotate_and_distribute_keys();
                 }
             }
@@ -1048,7 +993,6 @@ impl AppState {
                         }
                         Err(e) => {
                             dlog!("handle_incoming({}) → ERROR: {}", frame.event, e);
-                            eprintln!("channel error: {}", e);
                         }
                     }
                     // Update has_keys; if we just got keys, re-decrypt stored messages
@@ -1079,7 +1023,7 @@ impl AppState {
                                     let _ = self.ws_tx.send(f.encode());
                                 }
                             }
-                            Err(e) => eprintln!("sync error: {}", e),
+                            Err(e) => dlog!("sync error: {}", e),
                         }
                     }
                 }
@@ -1098,19 +1042,7 @@ impl AppState {
     }
 
     fn handle_msg_new(&mut self, payload: &serde_json::Value) {
-        let uuid = payload["uuid"].as_str().unwrap_or("").to_string();
-        let sender_uuid = payload["sender_uuid"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
         let global_seq = payload["global_seq"].as_i64().unwrap_or(0);
-        let thread_uuid = payload["thread_uuid"].as_str().map(|s| s.to_string());
-        let reply_to_uuid = payload["reply_to_uuid"].as_str().map(|s| s.to_string());
-        let timestamp = payload["ts"]
-            .as_str()
-            .or(payload["client_ts"].as_str())
-            .unwrap_or("")
-            .to_string();
 
         // First store in SQLite via ChatChannel
         if let Some(ref mut ch) = self.chat_channel {
@@ -1120,42 +1052,17 @@ impl AppState {
             }
         }
 
-        // Decrypt
-        let body = if let Some(ref ch) = self.chat_channel {
-            if let Some(ref crypto) = ch.crypto {
-                if let Ok(sender_id) = Uuid::parse_str(&sender_uuid) {
-                    let ciphertext = payload["ciphertext"].as_str().unwrap_or("");
-                    crypto
-                        .decrypt(&sender_id, ciphertext)
-                        .unwrap_or_else(|_| "<decrypt failed>".to_string())
-                } else {
-                    "<invalid sender>".to_string()
-                }
-            } else {
-                "<awaiting keys>".to_string()
-            }
-        } else {
-            "<no channel>".to_string()
-        };
-
-        let sender_name = self
-            .name_cache
-            .get(&sender_uuid)
-            .cloned()
-            .unwrap_or_else(|| sender_uuid.chars().take(8).collect());
+        let msg = self.parse_message_payload(payload);
+        let uuid = msg.uuid.clone();
 
         // If this UUID was optimistically inserted as pending, confirm it
-        if self.msg_store.by_uuid.contains_key(&uuid) {
-            if let Some(existing) = self.msg_store.by_uuid.get_mut(&uuid) {
-                existing.pending = false;
-                existing.global_seq = global_seq;
-                existing.body = body;
-            }
+        if let Some(existing) = self.msg_store.by_uuid.get_mut(&uuid) {
+            existing.pending = false;
+            existing.global_seq = msg.global_seq;
+            existing.body = msg.body;
+
             // Update position in top_level now that we have the real global_seq
-            if let Some(thread_root) = &thread_uuid {
-                // Reply — already in threads, just update seq
-                let _ = thread_root;
-            } else {
+            if msg.thread_uuid.is_none() {
                 self.msg_store.top_level.retain(|u| u != &uuid);
                 let pos = self.msg_store.top_level.iter().position(|u| {
                     self.msg_store
@@ -1175,18 +1082,6 @@ impl AppState {
             self.highlights.insert(uuid, Instant::now());
             return;
         }
-
-        let msg = DisplayMessage {
-            uuid: uuid.clone(),
-            sender_uuid,
-            sender_name,
-            body,
-            timestamp,
-            global_seq,
-            thread_uuid,
-            reply_to_uuid,
-            pending: false,
-        };
 
         self.highlights.insert(uuid, Instant::now());
         self.msg_store.insert(msg);
@@ -1354,10 +1249,7 @@ impl AppState {
                 invited_by,
                 received_at: chrono::Utc::now().timestamp(),
             });
-            self.toast = Some((
-                format!("New invitation: {}", topic),
-                Instant::now() + std::time::Duration::from_secs(5),
-            ));
+            self.show_toast(format!("New invitation: {}", topic), 5);
         }
     }
 

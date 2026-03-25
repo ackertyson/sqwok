@@ -54,25 +54,13 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
                     .as_deref()
                     .map(|s| format!("  from {}", s))
                     .unwrap_or_default();
-                let ago = {
-                    let now = chrono::Utc::now().timestamp();
-                    let diff = now - inv.received_at;
-                    if diff < 60 {
-                        "just now".to_string()
-                    } else if diff < 3600 {
-                        format!("{}m ago", diff / 60)
-                    } else if diff < 86400 {
-                        format!("{}h ago", diff / 3600)
-                    } else {
-                        format!("{}d ago", diff / 86400)
-                    }
-                };
+                let ago = s::format_time_ago(inv.received_at);
                 let content = Line::from(vec![
-                    Span::styled("● ", Style::default().fg(ratatui::style::Color::Yellow)),
+                    Span::styled("● ", Style::default().fg(s::warning_color())),
                     Span::styled(
                         inv.topic.clone(),
                         Style::default()
-                            .fg(ratatui::style::Color::Yellow)
+                            .fg(s::warning_color())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(from, Style::default().fg(s::dim())),
@@ -89,7 +77,7 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
                     app.invitations.len()
                 ))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(ratatui::style::Color::Yellow)),
+                .border_style(Style::default().fg(s::warning_color())),
         );
         frame.render_widget(inv_list, chunks[1]);
     }

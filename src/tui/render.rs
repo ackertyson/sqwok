@@ -30,7 +30,7 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
 
     if app.panes.len() == 1 {
         // Clone the pane snapshot to avoid borrow conflict
-        let pane_snap = app.panes[0].clone_snapshot();
+        let pane_snap = app.panes[0].clone();
         views::chat::draw(frame, area, app, &pane_snap);
     } else {
         let pane_count = app.panes.len();
@@ -50,7 +50,7 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
             .split(area);
 
         // Clone all pane snapshots upfront to avoid borrow issues during rendering
-        let pane_snapshots: Vec<_> = app.panes.iter().map(|p| p.clone_snapshot()).collect();
+        let pane_snapshots: Vec<_> = app.panes.to_vec();
 
         for (i, pane_snap) in pane_snapshots.iter().enumerate() {
             let chunk = chunks[i];
@@ -106,7 +106,7 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
     }
 
     if app.command_bar.is_some() {
-        let cmd_clone = app.command_bar.as_ref().unwrap().clone_for_draw();
+        let cmd_clone = app.command_bar.as_ref().unwrap().clone();
         views::command_bar::draw(frame, &cmd_clone);
     }
 

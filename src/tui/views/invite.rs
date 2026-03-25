@@ -82,8 +82,7 @@ fn draw_configure(frame: &mut Frame, area: ratatui::layout::Rect, state: &Invite
     );
 
     if let Some(ref err) = state.error {
-        let err_line =
-            Paragraph::new(err.as_str()).style(Style::default().fg(ratatui::style::Color::Red));
+        let err_line = Paragraph::new(err.as_str()).style(Style::default().fg(s::error_color()));
         frame.render_widget(err_line, chunks[1]);
     }
 }
@@ -113,7 +112,7 @@ fn draw_display(frame: &mut Frame, area: ratatui::layout::Rect, state: &InviteMo
             Paragraph::new(code.clone())
                 .style(
                     Style::default()
-                        .fg(ratatui::style::Color::Green)
+                        .fg(s::success_color())
                         .add_modifier(Modifier::BOLD),
                 )
                 .alignment(Alignment::Center),

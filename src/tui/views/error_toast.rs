@@ -51,7 +51,7 @@ pub fn draw(frame: &mut Frame, app: &AppState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(s::error_color()))
-        .style(Style::default().bg(ratatui::style::Color::Rgb(40, 15, 15)));
+        .style(Style::default().bg(s::error_bg()));
 
     let paragraph = Paragraph::new(lines)
         .style(Style::default().fg(s::error_color()))

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -23,12 +23,10 @@ pub fn draw(frame: &mut Frame, state: &SearchModalState) {
             .split(area);
 
         // Query input field
-        let input_line = Line::from(vec![
-            Span::styled("Search: ", Style::default().fg(s::dim())),
-            Span::styled(&state.query, Style::default().fg(s::fg())),
-            Span::styled("█", Style::default().fg(s::accent())),
-        ]);
-        frame.render_widget(Paragraph::new(input_line), chunks[0]);
+        frame.render_widget(
+            Paragraph::new(s::input_line("Search: ", &state.query)),
+            chunks[0],
+        );
 
         // Hint
         frame.render_widget(
@@ -58,14 +56,7 @@ pub fn draw(frame: &mut Frame, state: &SearchModalState) {
                 .enumerate()
                 .map(|(i, r)| {
                     let selected = i == state.selected;
-                    let style = if selected {
-                        Style::default()
-                            .bg(s::selection_bg())
-                            .fg(s::fg())
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(s::fg())
-                    };
+                    let style = s::selected_style(selected);
                     let marker = if selected { "► " } else { "  " };
                     Line::from(vec![
                         Span::styled(marker, style),
