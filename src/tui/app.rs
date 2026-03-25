@@ -185,6 +185,8 @@ pub struct TuiMessageStore {
     pub threads: HashMap<String, Vec<String>>,
     /// Which threads are expanded
     pub expanded: HashSet<String>,
+    /// Which depth-1 messages have their depth-2 replies collapsed
+    pub collapsed_subs: HashSet<String>,
     /// Lowest global_seq currently loaded (for scrollback pagination)
     pub low_water: i64,
     /// Whether there are more messages in SQLite above the current window
@@ -198,6 +200,7 @@ impl TuiMessageStore {
             by_uuid: HashMap::new(),
             threads: HashMap::new(),
             expanded: HashSet::new(),
+            collapsed_subs: HashSet::new(),
             low_water: i64::MAX,
             has_more_above: true,
         }
@@ -208,6 +211,7 @@ impl TuiMessageStore {
         self.by_uuid.clear();
         self.threads.clear();
         self.expanded.clear();
+        self.collapsed_subs.clear();
         self.low_water = i64::MAX;
         self.has_more_above = true;
     }
@@ -386,11 +390,43 @@ impl AppState {
     }
 
     pub fn expand_thread(&mut self) {
+        let rows = self.build_render_rows();
         let selected = self.panes[self.active_pane].selected;
-        if let Some(uuid) = self.selected_collapsed_thread_uuid(selected) {
+
+        // Find a collapsed top-level thread or a depth-1 message with a collapsed subthread.
+        let expand_top = rows.get(selected).and_then(|r| {
+            if let RenderRow::CollapsedThread { uuid, .. } = r {
+                Some(uuid.clone())
+            } else {
+                None
+            }
+        });
+        let expand_sub = rows.get(selected).and_then(|r| {
+            if let RenderRow::Message {
+                uuid,
+                thread_uuid,
+                reply_to_uuid,
+                ..
+            } = r
+            {
+                if thread_uuid.is_some()
+                    && reply_to_uuid.is_none()
+                    && self.msg_store.collapsed_subs.contains(uuid.as_str())
+                {
+                    return Some(uuid.clone());
+                }
+            }
+            None
+        });
+        drop(rows);
+
+        if let Some(uuid) = expand_top {
             self.msg_store.expanded.insert(uuid);
+        } else if let Some(uuid) = expand_sub {
+            // Re-expand a collapsed subthread.
+            self.msg_store.collapsed_subs.remove(&uuid);
         } else {
-            // On a depth-1 message, right arrow initiates a depth-2 reply.
+            // On a depth-1 message with an expanded subthread, right arrow initiates a depth-2 reply.
             self.reply_to_selected();
         }
     }
@@ -399,50 +435,53 @@ impl AppState {
         let rows = self.build_render_rows();
         let selected = self.panes[self.active_pane].selected;
 
-        // Walk the selected row to determine what to do.
-        let reply_to = match rows.get(selected) {
-            Some(RenderRow::Message { reply_to_uuid, .. }) => reply_to_uuid.clone(),
-            Some(RenderRow::Input { reply_to_uuid, .. }) => reply_to_uuid.clone(),
-            _ => None,
-        };
-        let thread_root = match rows.get(selected) {
+        // Extract context from the selected row.
+        let (uuid, thread_uuid, reply_to_uuid) = match rows.get(selected) {
             Some(RenderRow::Message {
-                thread_uuid, uuid, ..
-            }) => thread_uuid.clone().or_else(|| {
-                if self.msg_store.expanded.contains(uuid.as_str()) {
-                    Some(uuid.clone())
-                } else {
-                    None
-                }
-            }),
-            Some(RenderRow::Input { thread_uuid, .. }) => thread_uuid.clone(),
-            _ => None,
+                uuid,
+                thread_uuid,
+                reply_to_uuid,
+                ..
+            }) => (
+                Some(uuid.clone()),
+                thread_uuid.clone(),
+                reply_to_uuid.clone(),
+            ),
+            Some(RenderRow::Input {
+                thread_uuid,
+                reply_to_uuid,
+                ..
+            }) => (None, thread_uuid.clone(), reply_to_uuid.clone()),
+            _ => (None, None, None),
         };
 
-        if let Some(parent_uuid) = reply_to {
-            // Depth-2 row: move focus up to the parent depth-1 message.
+        if let Some(parent_uuid) = reply_to_uuid {
+            // Depth-2: collapse this subthread and navigate focus to the depth-1 parent.
+            self.msg_store.collapsed_subs.insert(parent_uuid.clone());
+            self.panes[self.active_pane].editing = None;
             if let Some(idx) = rows
                 .iter()
                 .position(|r| matches!(r, RenderRow::Message { uuid, .. } if uuid == &parent_uuid))
             {
                 self.panes[self.active_pane].selected = idx;
-                self.panes[self.active_pane].editing = None;
             }
-        } else if let Some(root) = thread_root {
-            // Depth-0/depth-1/thread-input row: collapse the top-level thread.
+        } else if let Some(msg_uuid) = uuid {
+            if self.msg_store.collapsed_subs.contains(msg_uuid.as_str()) {
+                // Depth-1 subthread already collapsed: collapse the entire top-level thread.
+                if let Some(root) = thread_uuid {
+                    self.msg_store.expanded.remove(&root);
+                }
+            } else if thread_uuid.is_some() {
+                // Depth-1 subthread is expanded: collapse just this subthread.
+                self.msg_store.collapsed_subs.insert(msg_uuid);
+            } else if self.msg_store.expanded.contains(msg_uuid.as_str()) {
+                // Depth-0 expanded thread: collapse it.
+                self.msg_store.expanded.remove(msg_uuid.as_str());
+            }
+        } else if let Some(root) = thread_uuid {
+            // Thread input row: collapse the top-level thread.
             self.msg_store.expanded.remove(&root);
         }
-    }
-
-    fn selected_collapsed_thread_uuid(&self, selected: usize) -> Option<String> {
-        let rows = self.build_render_rows();
-        rows.get(selected).and_then(|r| {
-            if let RenderRow::CollapsedThread { uuid, .. } = r {
-                Some(uuid.clone())
-            } else {
-                None
-            }
-        })
     }
 
     pub fn activate(&mut self) {
@@ -1354,6 +1393,7 @@ impl AppState {
                     is_mine: msg.sender_uuid == self.my_uuid,
                     is_pending: msg.pending,
                     highlight_age: self.highlights.get(top_uuid).map(|i| i.elapsed()),
+                    collapsed_sub_count: None,
                 });
 
                 // Thread replies if expanded
@@ -1379,6 +1419,26 @@ impl AppState {
                             Some(m) => m,
                             None => continue,
                         };
+                        let collapsed_sub_count =
+                            if self.msg_store.collapsed_subs.contains(reply_uuid.as_str()) {
+                                Some(
+                                    d2_uuids
+                                        .iter()
+                                        .filter(|u| {
+                                            self.msg_store
+                                                .by_uuid
+                                                .get(u.as_str())
+                                                .map(|m| {
+                                                    m.reply_to_uuid.as_deref()
+                                                        == Some(reply_uuid.as_str())
+                                                })
+                                                .unwrap_or(false)
+                                        })
+                                        .count(),
+                                )
+                            } else {
+                                None
+                            };
                         rows.push(RenderRow::Message {
                             uuid: reply_uuid.to_string(),
                             author: display_name(&reply.sender_uuid, &reply.sender_name),
@@ -1391,47 +1451,54 @@ impl AppState {
                             is_mine: reply.sender_uuid == self.my_uuid,
                             is_pending: reply.pending,
                             highlight_age: self.highlights.get(*reply_uuid).map(|i| i.elapsed()),
+                            collapsed_sub_count,
                         });
 
-                        // Depth-2 replies that target this depth-1 message
-                        for sub_uuid in d2_uuids.iter() {
-                            let sub = match self.msg_store.by_uuid.get(*sub_uuid) {
-                                Some(m) => m,
-                                None => continue,
-                            };
-                            if sub.reply_to_uuid.as_deref() != Some(reply_uuid.as_str()) {
-                                continue;
+                        // Depth-2 replies — only shown when the subthread is not collapsed.
+                        if !self.msg_store.collapsed_subs.contains(reply_uuid.as_str()) {
+                            for sub_uuid in d2_uuids.iter() {
+                                let sub = match self.msg_store.by_uuid.get(*sub_uuid) {
+                                    Some(m) => m,
+                                    None => continue,
+                                };
+                                if sub.reply_to_uuid.as_deref() != Some(reply_uuid.as_str()) {
+                                    continue;
+                                }
+                                rows.push(RenderRow::Message {
+                                    uuid: sub_uuid.to_string(),
+                                    author: display_name(&sub.sender_uuid, &sub.sender_name),
+                                    author_uuid: sub.sender_uuid.clone(),
+                                    body: sub.body.clone(),
+                                    timestamp: format_timestamp(&sub.timestamp),
+                                    indent: 2,
+                                    thread_uuid: Some(top_uuid.clone()),
+                                    reply_to_uuid: sub.reply_to_uuid.clone(),
+                                    is_mine: sub.sender_uuid == self.my_uuid,
+                                    is_pending: sub.pending,
+                                    highlight_age: self
+                                        .highlights
+                                        .get(*sub_uuid)
+                                        .map(|i| i.elapsed()),
+                                    collapsed_sub_count: None,
+                                });
                             }
-                            rows.push(RenderRow::Message {
-                                uuid: sub_uuid.to_string(),
-                                author: display_name(&sub.sender_uuid, &sub.sender_name),
-                                author_uuid: sub.sender_uuid.clone(),
-                                body: sub.body.clone(),
-                                timestamp: format_timestamp(&sub.timestamp),
-                                indent: 2,
-                                thread_uuid: Some(top_uuid.clone()),
-                                reply_to_uuid: sub.reply_to_uuid.clone(),
-                                is_mine: sub.sender_uuid == self.my_uuid,
-                                is_pending: sub.pending,
-                                highlight_age: self.highlights.get(*sub_uuid).map(|i| i.elapsed()),
-                            });
-                        }
 
-                        // Inline depth-2 reply input if active for this depth-1 message
-                        let reply_target =
-                            InputTarget::Reply(reply_uuid.to_string(), top_uuid.clone());
-                        if pane.editing.as_ref() == Some(&reply_target) {
-                            rows.push(RenderRow::Input {
-                                thread_uuid: Some(top_uuid.clone()),
-                                reply_to_uuid: Some(reply_uuid.to_string()),
-                                indent: 2,
-                                is_active: true,
-                                content: pane
-                                    .inputs
-                                    .get(&reply_target)
-                                    .cloned()
-                                    .unwrap_or_default(),
-                            });
+                            // Inline depth-2 reply input if active for this depth-1 message
+                            let reply_target =
+                                InputTarget::Reply(reply_uuid.to_string(), top_uuid.clone());
+                            if pane.editing.as_ref() == Some(&reply_target) {
+                                rows.push(RenderRow::Input {
+                                    thread_uuid: Some(top_uuid.clone()),
+                                    reply_to_uuid: Some(reply_uuid.to_string()),
+                                    indent: 2,
+                                    is_active: true,
+                                    content: pane
+                                        .inputs
+                                        .get(&reply_target)
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                });
+                            }
                         }
                     }
 
@@ -1498,6 +1565,8 @@ pub enum RenderRow {
         is_mine: bool,
         is_pending: bool,
         highlight_age: Option<std::time::Duration>,
+        /// For depth-1 messages with a collapsed subthread, the number of hidden depth-2 replies.
+        collapsed_sub_count: Option<usize>,
     },
     CollapsedThread {
         uuid: String,

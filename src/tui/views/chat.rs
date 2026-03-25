@@ -184,6 +184,7 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
         timestamp,
         reply_to_uuid,
         is_pending,
+        collapsed_sub_count,
         ..
     } = row
     else {
@@ -193,17 +194,16 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
         return 1;
     }
     let w = width as usize;
-    let indent_len = match indent {
-        0 => 0usize,
-        1 => 5,
-        _ => 9,
-    };
+    let indent_len = indent_width(*indent);
     let reply_len = if reply_to_uuid.is_some() { 2usize } else { 0 };
     let pending_len: usize = if *is_pending { " sending...".len() } else { 0 };
     // prefix: indent + reply + author + "  "
     let prefix_len = indent_len + reply_len + author.chars().count() + 2;
-    // suffix on first line: "  " + timestamp
-    let ts_len = 2 + timestamp.chars().count();
+    // suffix on last line: optional "[N replies]  " + "  " + timestamp
+    let replies_tag_len = collapsed_sub_count
+        .map(|n| format!("  [{} replies]", n).chars().count())
+        .unwrap_or(0);
+    let ts_len = replies_tag_len + 2 + timestamp.chars().count();
     let body_len = body.chars().count() + pending_len;
 
     // First line fits prefix + body_first + timestamp
@@ -242,6 +242,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             is_pending,
             highlight_age,
             reply_to_uuid,
+            collapsed_sub_count,
             ..
         } => {
             let actual_bg = if is_selected {
@@ -277,27 +278,46 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             let reply_chars = reply_prefix.chars().count();
             let author_chars = author.chars().count();
             let prefix_len = indent_chars + reply_chars + author_chars + 2; // +2 for "  "
+            let replies_tag = collapsed_sub_count.map(|n| format!("[{} replies]", n));
+            let replies_tag_len = replies_tag
+                .as_ref()
+                .map(|s| 2 + s.chars().count())
+                .unwrap_or(0);
             let ts_suffix = format!("  {}", timestamp);
-            let ts_len = ts_suffix.chars().count();
+            let ts_len = replies_tag_len + ts_suffix.chars().count();
             let body_chars: Vec<char> = full_body.chars().collect();
             let first_avail = w.saturating_sub(prefix_len + ts_len);
             let cont_avail = w.saturating_sub(prefix_len).max(1);
 
-            // Build lines: first line has prefix + body_chunk + timestamp,
+            // Trailing spans appended after the body on the last line.
+            let trailing_spans = |extra: Vec<Span<'static>>| -> Vec<Span<'static>> {
+                let mut v = extra;
+                if let Some(ref tag) = replies_tag {
+                    v.push(Span::raw("  "));
+                    v.push(Span::styled(tag.clone(), Style::default().fg(s::accent())));
+                }
+                v.push(Span::styled(
+                    ts_suffix.clone(),
+                    Style::default().fg(s::dim()),
+                ));
+                v
+            };
+
+            // Build lines: first line has prefix + body_chunk + trailing spans,
             // continuation lines have padding + body_chunk (aligned under body).
             let padding = " ".repeat(prefix_len);
             let mut lines: Vec<Line> = Vec::new();
 
             if body_chars.len() <= first_avail || first_avail == 0 {
                 // Single line
-                let spans = vec![
+                let mut spans = vec![
                     Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
                     Span::styled(reply_prefix, Style::default().fg(s::dim())),
                     Span::styled(author.clone(), name_style),
                     Span::raw("  "),
                     Span::raw(full_body.clone()),
-                    Span::styled(ts_suffix.clone(), Style::default().fg(s::dim())),
                 ];
+                spans.extend(trailing_spans(vec![]));
                 lines.push(Line::from(spans).style(Style::default().bg(actual_bg)));
             } else {
                 // Multi-line: first line
@@ -318,11 +338,9 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                     let chunk: String = body_chars[pos..end].iter().collect();
                     let is_last = end >= body_chars.len();
                     let line = if is_last {
-                        Line::from(vec![
-                            Span::raw(padding.clone()),
-                            Span::raw(chunk),
-                            Span::styled(ts_suffix.clone(), Style::default().fg(s::dim())),
-                        ])
+                        let mut spans = vec![Span::raw(padding.clone()), Span::raw(chunk)];
+                        spans.extend(trailing_spans(vec![]));
+                        Line::from(spans)
                     } else {
                         Line::from(vec![Span::raw(padding.clone()), Span::raw(chunk)])
                     };
@@ -393,6 +411,14 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             let line = Line::from(spans);
             frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), area);
         }
+    }
+}
+
+fn indent_width(indent: u8) -> usize {
+    match indent {
+        0 => 0,
+        1 => 5, // "  +- "
+        _ => 9, // "  |  +- "
     }
 }
 
