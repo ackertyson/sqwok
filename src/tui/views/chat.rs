@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -12,17 +12,7 @@ use crate::tui::{
     style as s,
 };
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // chat topic
-            Constraint::Min(1),    // messages
-            Constraint::Length(1), // status
-        ])
-        .split(area);
-
-    // Topic bar — look up friendly name from chat_list, fall back to uuid
+pub fn draw_top_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     let chat_summary = app
         .current_chat
         .as_deref()
@@ -75,35 +65,29 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
         ]);
         spans
     });
-    frame.render_widget(Paragraph::new(topic_line), chunks[0]);
+    frame.render_widget(Paragraph::new(topic_line), area);
+}
 
-    // Message area
-    draw_messages(frame, chunks[1], app, pane);
-
-    // Status bar — show screenname and editing indicator
-    let editing_hint = if pane.current_input().is_empty() {
-        ""
-    } else {
-        " [typing...]"
-    };
+pub fn draw_bottom_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     let mut status_spans = vec![
         Span::styled(app.my_screenname.clone(), Style::default().fg(s::accent())),
-        Span::styled(editing_hint, Style::default().fg(s::dim())),
         Span::raw("  "),
     ];
     let hint = s::hint_line(&[
         ("↑↓", "nav"),
-        ("Enter", "edit"),
-        ("→/←", "expand/collapse"),
+        ("Enter", "new msg"),
+        ("Esc", "cancel input"),
+        ("→/←", "thread show/hide"),
         ("/", "cmd"),
         ("Alt+\\", "vpane"),
         ("Alt+-", "hpane"),
+        ("Ctrl+c", "quit"),
     ]);
     status_spans.extend(hint.spans);
-    frame.render_widget(Paragraph::new(Line::from(status_spans)), chunks[2]);
+    frame.render_widget(Paragraph::new(Line::from(status_spans)), area);
 }
 
-fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
+pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
     let rows = app.build_render_rows_for_pane(pane);
     let total_rows = rows.len();
 
@@ -246,7 +230,12 @@ fn area_height_cap() -> usize {
 /// available width are hard-broken at the character level.
 fn wrap_words(text: &str, first_width: usize, cont_width: usize) -> Vec<String> {
     let avail = |line_idx: usize| -> usize {
-        (if line_idx == 0 { first_width } else { cont_width }).max(1)
+        (if line_idx == 0 {
+            first_width
+        } else {
+            cont_width
+        })
+        .max(1)
     };
 
     let mut lines: Vec<String> = Vec::new();
@@ -566,10 +555,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                     }
                     lines.push(Line::from(spans));
                 }
-                frame.render_widget(
-                    Paragraph::new(lines).style(Style::default().bg(bg)),
-                    area,
-                );
+                frame.render_widget(Paragraph::new(lines).style(Style::default().bg(bg)), area);
             }
         }
     }

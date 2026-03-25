@@ -96,8 +96,7 @@ pub async fn run(
                     if app.current_chat.as_deref() == Some(&chat_uuid) {
                         app.current_chat = None;
                         app.chat_channel = None;
-                        app.msg_store.clear();
-                        app.members.clear();
+                        app.clear_chat_state();
                         app.mode = app::Mode::ChatPicker;
                     }
                     app.chat_list.retain(|c| c.uuid != chat_uuid);
@@ -203,8 +202,7 @@ pub async fn run(
                 }
                 app.current_chat = None;
                 app.chat_channel = None;
-                app.msg_store.clear();
-                app.members.clear();
+                app.clear_chat_state();
                 app.mode = app::Mode::ChatPicker;
                 app.pending_leave_chat = false;
                 app.toast = Some((

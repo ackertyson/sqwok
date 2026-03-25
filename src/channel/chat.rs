@@ -80,7 +80,11 @@ impl ChatChannel {
         self.frame("key:request", serde_json::json!({}))
     }
 
-    pub fn typing_notify_frame(&self, thread_uuid: Option<&str>, reply_to_uuid: Option<&str>) -> Frame {
+    pub fn typing_notify_frame(
+        &self,
+        thread_uuid: Option<&str>,
+        reply_to_uuid: Option<&str>,
+    ) -> Frame {
         self.frame(
             "typing:notify",
             serde_json::json!({

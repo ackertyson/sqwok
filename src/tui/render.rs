@@ -28,10 +28,24 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
 fn draw_chat(frame: &mut Frame, app: &mut AppState) {
     let area = frame.area();
 
+    // Outer 3-row layout: top bar, pane area, bottom bar
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    views::chat::draw_top_bar(frame, outer[0], app);
+    views::chat::draw_bottom_bar(frame, outer[2], app);
+
+    let pane_area = outer[1];
+
     if app.panes.len() == 1 {
-        // Clone the pane snapshot to avoid borrow conflict
         let pane_snap = app.panes[0].clone();
-        views::chat::draw(frame, area, app, &pane_snap);
+        views::chat::draw_messages(frame, pane_area, app, &pane_snap);
     } else {
         let pane_count = app.panes.len();
         let active_pane_idx = app.active_pane;
@@ -47,9 +61,8 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
                     .map(|_| Constraint::Ratio(1, pane_count as u32))
                     .collect::<Vec<_>>(),
             )
-            .split(area);
+            .split(pane_area);
 
-        // Clone all pane snapshots upfront to avoid borrow issues during rendering
         let pane_snapshots: Vec<_> = app.panes.to_vec();
 
         for (i, pane_snap) in pane_snapshots.iter().enumerate() {
@@ -64,7 +77,7 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
                 .border_style(border_style);
             let inner = block.inner(chunk);
             frame.render_widget(block, chunk);
-            views::chat::draw(frame, inner, app, pane_snap);
+            views::chat::draw_messages(frame, inner, app, pane_snap);
         }
     }
 

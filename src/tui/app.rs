@@ -183,10 +183,6 @@ pub struct TuiMessageStore {
     pub by_uuid: HashMap<String, DisplayMessage>,
     /// Thread children: thread_root_uuid -> [child uuids in order]
     pub threads: HashMap<String, Vec<String>>,
-    /// Which threads are expanded
-    pub expanded: HashSet<String>,
-    /// Which depth-1 messages have their depth-2 replies collapsed
-    pub collapsed_subs: HashSet<String>,
     /// Lowest global_seq currently loaded (for scrollback pagination)
     pub low_water: i64,
     /// Whether there are more messages in SQLite above the current window
@@ -199,8 +195,6 @@ impl TuiMessageStore {
             top_level: Vec::new(),
             by_uuid: HashMap::new(),
             threads: HashMap::new(),
-            expanded: HashSet::new(),
-            collapsed_subs: HashSet::new(),
             low_water: i64::MAX,
             has_more_above: true,
         }
@@ -210,8 +204,6 @@ impl TuiMessageStore {
         self.top_level.clear();
         self.by_uuid.clear();
         self.threads.clear();
-        self.expanded.clear();
-        self.collapsed_subs.clear();
         self.low_water = i64::MAX;
         self.has_more_above = true;
     }
@@ -464,7 +456,9 @@ impl AppState {
             {
                 if thread_uuid.is_some()
                     && reply_to_uuid.is_none()
-                    && self.msg_store.collapsed_subs.contains(uuid.as_str())
+                    && self.panes[self.active_pane]
+                        .collapsed_subs
+                        .contains(uuid.as_str())
                 {
                     return Some(uuid.clone());
                 }
@@ -474,10 +468,10 @@ impl AppState {
         drop(rows);
 
         if let Some(uuid) = expand_top {
-            self.msg_store.expanded.insert(uuid);
+            self.panes[self.active_pane].expanded.insert(uuid);
         } else if let Some(uuid) = expand_sub {
             // Re-expand a collapsed subthread.
-            self.msg_store.collapsed_subs.remove(&uuid);
+            self.panes[self.active_pane].collapsed_subs.remove(&uuid);
         } else {
             // On a depth-1 message with an expanded subthread, right arrow initiates a depth-2 reply.
             self.reply_to_selected();
@@ -510,7 +504,9 @@ impl AppState {
 
         if let Some(parent_uuid) = reply_to_uuid {
             // Depth-2: collapse this subthread and navigate focus to the depth-1 parent.
-            self.msg_store.collapsed_subs.insert(parent_uuid.clone());
+            self.panes[self.active_pane]
+                .collapsed_subs
+                .insert(parent_uuid.clone());
             self.panes[self.active_pane].editing = None;
             if let Some(idx) = rows
                 .iter()
@@ -519,21 +515,29 @@ impl AppState {
                 self.panes[self.active_pane].selected = idx;
             }
         } else if let Some(msg_uuid) = uuid {
-            if self.msg_store.collapsed_subs.contains(msg_uuid.as_str()) {
+            if self.panes[self.active_pane]
+                .collapsed_subs
+                .contains(msg_uuid.as_str())
+            {
                 // Depth-1 subthread already collapsed: collapse the entire top-level thread.
                 if let Some(root) = thread_uuid {
-                    self.msg_store.expanded.remove(&root);
+                    self.panes[self.active_pane].expanded.remove(&root);
                 }
             } else if thread_uuid.is_some() {
                 // Depth-1 subthread is expanded: collapse just this subthread.
-                self.msg_store.collapsed_subs.insert(msg_uuid);
-            } else if self.msg_store.expanded.contains(msg_uuid.as_str()) {
+                self.panes[self.active_pane].collapsed_subs.insert(msg_uuid);
+            } else if self.panes[self.active_pane]
+                .expanded
+                .contains(msg_uuid.as_str())
+            {
                 // Depth-0 expanded thread: collapse it.
-                self.msg_store.expanded.remove(msg_uuid.as_str());
+                self.panes[self.active_pane]
+                    .expanded
+                    .remove(msg_uuid.as_str());
             }
         } else if let Some(root) = thread_uuid {
             // Thread input row: collapse the top-level thread.
-            self.msg_store.expanded.remove(&root);
+            self.panes[self.active_pane].expanded.remove(&root);
         }
     }
 
@@ -543,7 +547,7 @@ impl AppState {
         match rows.get(selected) {
             Some(RenderRow::CollapsedThread { uuid, .. }) => {
                 let uuid = uuid.clone();
-                self.msg_store.expanded.insert(uuid);
+                self.panes[self.active_pane].expanded.insert(uuid);
             }
             Some(RenderRow::Message {
                 uuid,
@@ -558,20 +562,20 @@ impl AppState {
                     if let Some(parent) = reply_to_uuid {
                         // Depth-2 message: focus the depth-2 reply input for this parent.
                         let root = root.clone();
-                        self.msg_store.expanded.insert(root.clone());
+                        self.panes[self.active_pane].expanded.insert(root.clone());
                         self.panes[self.active_pane].editing =
                             Some(InputTarget::Reply(parent, root));
                         return;
                     }
                     // Depth-1 message: start a depth-2 reply targeting it.
                     let root = root.clone();
-                    self.msg_store.expanded.insert(root.clone());
+                    self.panes[self.active_pane].expanded.insert(root.clone());
                     self.panes[self.active_pane].editing = Some(InputTarget::Reply(uuid, root));
                     return;
                 }
                 // Top-level message: expand thread and focus thread input.
                 let root = thread_uuid.unwrap_or(uuid);
-                self.msg_store.expanded.insert(root.clone());
+                self.panes[self.active_pane].expanded.insert(root.clone());
                 self.panes[self.active_pane].editing = Some(InputTarget::Thread(root));
             }
             Some(RenderRow::Input {
@@ -606,7 +610,7 @@ impl AppState {
                 if msg.reply_to_uuid.is_none() {
                     let root = root.clone();
                     let uuid = uuid.clone();
-                    self.msg_store.expanded.insert(root.clone());
+                    self.panes[self.active_pane].expanded.insert(root.clone());
                     self.panes[self.active_pane].editing = Some(InputTarget::Reply(uuid, root));
                 }
             }
@@ -615,13 +619,17 @@ impl AppState {
 
     pub fn split_pane_vertical(&mut self) {
         self.pane_split = PaneSplit::Vertical;
-        self.panes.push(Pane::new());
+        let mut new_pane = self.panes[self.active_pane].clone();
+        new_pane.editing = None;
+        self.panes.push(new_pane);
         self.active_pane = self.panes.len() - 1;
     }
 
     pub fn split_pane_horizontal(&mut self) {
         self.pane_split = PaneSplit::Horizontal;
-        self.panes.push(Pane::new());
+        let mut new_pane = self.panes[self.active_pane].clone();
+        new_pane.editing = None;
+        self.panes.push(new_pane);
         self.active_pane = self.panes.len() - 1;
     }
 
@@ -960,6 +968,14 @@ impl AppState {
         }
     }
 
+    pub fn clear_chat_state(&mut self) {
+        self.msg_store.clear();
+        self.members.clear();
+        for pane in &mut self.panes {
+            pane.clear_view_state();
+        }
+    }
+
     pub fn join_chat(&mut self, chat_uuid: String) {
         let chat_dir = match crate::config::chat_dir(&chat_uuid) {
             Ok(d) => d,
@@ -1000,8 +1016,7 @@ impl AppState {
 
         self.current_chat = Some(chat_uuid.clone());
         self.chat_channel = Some(channel);
-        self.msg_store.clear();
-        self.members.clear();
+        self.clear_chat_state();
         self.mode = Mode::Chat;
         self.last_acked = 0;
         self.typing_indicators.clear();
@@ -1064,8 +1079,7 @@ impl AppState {
                     self.show_toast("You were removed from this chat", 5);
                     self.current_chat = None;
                     self.chat_channel = None;
-                    self.msg_store.clear();
-                    self.members.clear();
+                    self.clear_chat_state();
                     self.mode = Mode::ChatPicker;
                 } else {
                     // Another member was removed — rotate keys for forward secrecy
@@ -1447,7 +1461,7 @@ impl AppState {
             };
 
             let reply_count = self.msg_store.reply_count(top_uuid) as u32;
-            let is_expanded = self.msg_store.expanded.contains(top_uuid);
+            let is_expanded = pane.expanded.contains(top_uuid.as_str());
 
             if reply_count > 0 && !is_expanded {
                 // Collapsed thread
@@ -1507,7 +1521,7 @@ impl AppState {
                             None => continue,
                         };
                         let collapsed_sub_count =
-                            if self.msg_store.collapsed_subs.contains(reply_uuid.as_str()) {
+                            if pane.collapsed_subs.contains(reply_uuid.as_str()) {
                                 Some(
                                     d2_uuids
                                         .iter()
@@ -1547,7 +1561,7 @@ impl AppState {
                         });
 
                         // Depth-2 replies — only shown when the subthread is not collapsed.
-                        if !self.msg_store.collapsed_subs.contains(reply_uuid.as_str()) {
+                        if !pane.collapsed_subs.contains(reply_uuid.as_str()) {
                             for sub_uuid in d2_uuids.iter() {
                                 let sub = match self.msg_store.by_uuid.get(*sub_uuid) {
                                     Some(m) => m,
@@ -1577,10 +1591,10 @@ impl AppState {
                             }
 
                             // Depth-2 typing indicator (before the reply input)
-                            if self.typing_indicators.contains(&(
-                                Some(top_uuid.clone()),
-                                Some(reply_uuid.to_string()),
-                            )) {
+                            if self
+                                .typing_indicators
+                                .contains(&(Some(top_uuid.clone()), Some(reply_uuid.to_string())))
+                            {
                                 rows.push(RenderRow::TypingIndicator { indent: 2 });
                             }
 

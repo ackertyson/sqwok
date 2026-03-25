@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum InputTarget {
@@ -17,6 +17,10 @@ pub struct Pane {
     pub editing: Option<InputTarget>,
     /// Input field contents by target
     pub inputs: HashMap<InputTarget, String>,
+    /// Which threads are expanded in this pane
+    pub expanded: HashSet<String>,
+    /// Which depth-1 messages have their depth-2 replies collapsed in this pane
+    pub collapsed_subs: HashSet<String>,
 }
 
 impl Pane {
@@ -26,15 +30,18 @@ impl Pane {
             scroll_offset: 0,
             editing: None,
             inputs: HashMap::new(),
+            expanded: HashSet::new(),
+            collapsed_subs: HashSet::new(),
         }
     }
 
-    pub fn current_input(&self) -> &str {
-        if let Some(ref target) = self.editing {
-            self.inputs.get(target).map(|s| s.as_str()).unwrap_or("")
-        } else {
-            ""
-        }
+    pub fn clear_view_state(&mut self) {
+        self.expanded.clear();
+        self.collapsed_subs.clear();
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.editing = None;
+        self.inputs.clear();
     }
 
     pub fn push_char(&mut self, c: char) {

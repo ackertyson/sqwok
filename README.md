@@ -22,6 +22,13 @@ brew update
 brew upgrade sqwok
 ```
 
+### Docker
+
+```shell
+docker compose build sqwok
+docker compose run --rm sqwok join MY_INVITE_CODE
+```
+
 ### From source
 
 Install [Rust](https://rust-lang.org/tools/install/), then...
