@@ -177,6 +177,26 @@ fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
 
 /// Compute how many terminal lines a row will occupy at the given width.
 fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
+    if let RenderRow::Input {
+        indent,
+        is_active,
+        content,
+        ..
+    } = row
+    {
+        if !is_active || width == 0 {
+            return 1;
+        }
+        let prefix_len = indent_width(*indent) + 2; // "> "
+        let avail = (width as usize).saturating_sub(prefix_len).max(1);
+        // Include cursor char in wrap calculation
+        let cursor_content = format!("{}_", content);
+        return wrap_words(&cursor_content, avail, avail)
+            .len()
+            .max(1)
+            .min(area_height_cap()) as u16;
+    }
+
     let RenderRow::Message {
         indent,
         author,
@@ -196,7 +216,6 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
     let w = width as usize;
     let indent_len = indent_width(*indent);
     let reply_len = if reply_to_uuid.is_some() { 2usize } else { 0 };
-    let pending_len: usize = if *is_pending { " sending...".len() } else { 0 };
     // prefix: indent + reply + author + "  "
     let prefix_len = indent_len + reply_len + author.chars().count() + 2;
     // suffix on last line: optional "[N replies]  " + "  " + timestamp
@@ -204,24 +223,98 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
         .map(|n| format!("  [{} replies]", n).chars().count())
         .unwrap_or(0);
     let ts_len = replies_tag_len + 2 + timestamp.chars().count();
-    let body_len = body.chars().count() + pending_len;
-
-    // First line fits prefix + body_first + timestamp
     let first_avail = w.saturating_sub(prefix_len + ts_len);
-    if body_len <= first_avail || first_avail == 0 {
+    let cont_avail = w.saturating_sub(prefix_len).max(1);
+    if first_avail == 0 {
         return 1;
     }
-    // Remaining body wraps with prefix padding
-    let remaining = body_len - first_avail;
-    let cont_avail = w.saturating_sub(prefix_len).max(1);
-    let cont_lines = remaining.div_ceil(cont_avail);
-    (1 + cont_lines).min(area_height_cap()) as u16
+    let pending_suffix = if *is_pending { " sending..." } else { "" };
+    let full_body = format!("{}{}", body, pending_suffix);
+    wrap_words(&full_body, first_avail, cont_avail)
+        .len()
+        .min(area_height_cap()) as u16
 }
 
 /// Cap maximum row height to avoid pathological cases.
 #[inline]
 fn area_height_cap() -> usize {
     20
+}
+
+/// Word-wrap `text` into lines. The first line has at most `first_width` chars,
+/// continuation lines have at most `cont_width` chars. Words longer than the
+/// available width are hard-broken at the character level.
+fn wrap_words(text: &str, first_width: usize, cont_width: usize) -> Vec<String> {
+    let avail = |line_idx: usize| -> usize {
+        (if line_idx == 0 { first_width } else { cont_width }).max(1)
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+
+    for word in text.split_whitespace() {
+        let word_chars: Vec<char> = word.chars().collect();
+        let word_len = word_chars.len();
+
+        if current_len == 0 {
+            // At the start of a line — place word or hard-break it
+            let w = avail(lines.len());
+            if word_len <= w {
+                current.push_str(word);
+                current_len = word_len;
+            } else {
+                let mut pos = 0;
+                while pos < word_len {
+                    let w = avail(lines.len());
+                    let end = (pos + w).min(word_len);
+                    let chunk: String = word_chars[pos..end].iter().collect();
+                    current.push_str(&chunk);
+                    current_len += end - pos;
+                    if end < word_len {
+                        lines.push(std::mem::take(&mut current));
+                        current_len = 0;
+                    }
+                    pos = end;
+                }
+            }
+        } else {
+            let w = avail(lines.len());
+            if current_len + 1 + word_len <= w {
+                // Word fits on current line with a space
+                current.push(' ');
+                current.push_str(word);
+                current_len += 1 + word_len;
+            } else {
+                // Flush current line and start a new one
+                lines.push(std::mem::take(&mut current));
+                current_len = 0;
+                let w = avail(lines.len());
+                if word_len <= w {
+                    current.push_str(word);
+                    current_len = word_len;
+                } else {
+                    // Hard-break the oversized word
+                    let mut pos = 0;
+                    while pos < word_len {
+                        let w = avail(lines.len());
+                        let end = (pos + w).min(word_len);
+                        let chunk: String = word_chars[pos..end].iter().collect();
+                        current.push_str(&chunk);
+                        current_len += end - pos;
+                        if end < word_len {
+                            lines.push(std::mem::take(&mut current));
+                            current_len = 0;
+                        }
+                        pos = end;
+                    }
+                }
+            }
+        }
+    }
+
+    lines.push(current);
+    lines
 }
 
 fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, avail_width: u16) {
@@ -285,7 +378,6 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 .unwrap_or(0);
             let ts_suffix = format!("  {}", timestamp);
             let ts_len = replies_tag_len + ts_suffix.chars().count();
-            let body_chars: Vec<char> = full_body.chars().collect();
             let first_avail = w.saturating_sub(prefix_len + ts_len);
             let cont_avail = w.saturating_sub(prefix_len).max(1);
 
@@ -307,46 +399,37 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             // continuation lines have padding + body_chunk (aligned under body).
             let padding = " ".repeat(prefix_len);
             let mut lines: Vec<Line> = Vec::new();
-
-            if body_chars.len() <= first_avail || first_avail == 0 {
-                // Single line
-                let mut spans = vec![
-                    Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
-                    Span::styled(reply_prefix, Style::default().fg(s::dim())),
-                    Span::styled(author.clone(), name_style),
-                    Span::raw("  "),
-                    Span::raw(full_body.clone()),
-                ];
-                spans.extend(trailing_spans(vec![]));
-                lines.push(Line::from(spans).style(Style::default().bg(actual_bg)));
-            } else {
-                // Multi-line: first line
-                let first_chunk: String = body_chars[..first_avail].iter().collect();
-                let first_spans = vec![
-                    Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
-                    Span::styled(reply_prefix, Style::default().fg(s::dim())),
-                    Span::styled(author.clone(), name_style),
-                    Span::raw("  "),
-                    Span::raw(first_chunk),
-                ];
-                lines.push(Line::from(first_spans).style(Style::default().bg(actual_bg)));
-
-                // Continuation lines
-                let mut pos = first_avail;
-                while pos < body_chars.len() {
-                    let end = (pos + cont_avail).min(body_chars.len());
-                    let chunk: String = body_chars[pos..end].iter().collect();
-                    let is_last = end >= body_chars.len();
-                    let line = if is_last {
-                        let mut spans = vec![Span::raw(padding.clone()), Span::raw(chunk)];
-                        spans.extend(trailing_spans(vec![]));
-                        Line::from(spans)
-                    } else {
-                        Line::from(vec![Span::raw(padding.clone()), Span::raw(chunk)])
-                    };
-                    lines.push(line.style(Style::default().bg(actual_bg)));
-                    pos = end;
-                }
+            let wrapped = wrap_words(&full_body, first_avail, cont_avail);
+            let n = wrapped.len();
+            for (i, line_text) in wrapped.into_iter().enumerate() {
+                let is_first = i == 0;
+                let is_last = i + 1 == n;
+                let line = if is_first && is_last {
+                    let mut spans = vec![
+                        Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
+                        Span::styled(reply_prefix.to_string(), Style::default().fg(s::dim())),
+                        Span::styled(author.clone(), name_style),
+                        Span::raw("  "),
+                        Span::raw(line_text),
+                    ];
+                    spans.extend(trailing_spans(vec![]));
+                    Line::from(spans)
+                } else if is_first {
+                    Line::from(vec![
+                        Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
+                        Span::styled(reply_prefix.to_string(), Style::default().fg(s::dim())),
+                        Span::styled(author.clone(), name_style),
+                        Span::raw("  "),
+                        Span::raw(line_text),
+                    ])
+                } else if is_last {
+                    let mut spans = vec![Span::raw(padding.clone()), Span::raw(line_text)];
+                    spans.extend(trailing_spans(vec![]));
+                    Line::from(spans)
+                } else {
+                    Line::from(vec![Span::raw(padding.clone()), Span::raw(line_text)])
+                };
+                lines.push(line.style(Style::default().bg(actual_bg)));
             }
 
             frame.render_widget(
@@ -396,20 +479,63 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
         } => {
             let indent_str = build_indent(*indent);
             let prompt_color = if *is_active { s::accent() } else { s::dim() };
-            let mut spans = vec![
-                Span::styled(indent_str, Style::default().fg(s::dim())),
-                Span::styled("> ", Style::default().fg(prompt_color)),
-            ];
-            if *is_active {
-                spans.push(Span::raw(content.clone()));
-                spans.push(Span::styled("_", Style::default().fg(s::accent())));
-            } else if thread_uuid.is_some() {
-                spans.push(Span::styled("reply...", Style::default().fg(s::dim())));
+            if !is_active {
+                let mut spans = vec![
+                    Span::styled(indent_str, Style::default().fg(s::dim())),
+                    Span::styled("> ", Style::default().fg(prompt_color)),
+                ];
+                if thread_uuid.is_some() {
+                    spans.push(Span::styled("reply...", Style::default().fg(s::dim())));
+                } else {
+                    spans.push(Span::styled("message...", Style::default().fg(s::dim())));
+                }
+                frame.render_widget(
+                    Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
+                    area,
+                );
             } else {
-                spans.push(Span::styled("message...", Style::default().fg(s::dim())));
+                let prefix_len = indent_str.chars().count() + 2; // "> "
+                let avail = (avail_width as usize).saturating_sub(prefix_len).max(1);
+                let padding = " ".repeat(prefix_len);
+
+                // Wrap content+cursor together so the cursor drives line breaks
+                let cursor_content = format!("{}_", content);
+                let wrapped = wrap_words(&cursor_content, avail, avail);
+                let n = wrapped.len();
+                let mut lines: Vec<Line> = Vec::new();
+                for (i, line_text) in wrapped.into_iter().enumerate() {
+                    let is_first = i == 0;
+                    let is_last = i + 1 == n;
+                    // On the last line, strip the trailing "_" and re-add it as a styled span
+                    let (body_text, cursor_span): (String, Option<Span>) = if is_last {
+                        let mut chars = line_text.chars();
+                        chars.next_back(); // remove "_"
+                        (
+                            chars.collect(),
+                            Some(Span::styled("_", Style::default().fg(s::accent()))),
+                        )
+                    } else {
+                        (line_text, None)
+                    };
+                    let mut spans: Vec<Span> = if is_first {
+                        vec![
+                            Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
+                            Span::styled("> ", Style::default().fg(prompt_color)),
+                            Span::raw(body_text),
+                        ]
+                    } else {
+                        vec![Span::raw(padding.clone()), Span::raw(body_text)]
+                    };
+                    if let Some(cur) = cursor_span {
+                        spans.push(cur);
+                    }
+                    lines.push(Line::from(spans));
+                }
+                frame.render_widget(
+                    Paragraph::new(lines).style(Style::default().bg(bg)),
+                    area,
+                );
             }
-            let line = Line::from(spans);
-            frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), area);
         }
     }
 }
