@@ -297,6 +297,14 @@ pub struct AppState {
     pub pending_leave_chat: bool,
     /// (chat_uuid, user_uuid) to add as member
     pub pending_add_member: Option<(String, String)>,
+    /// Debounce: when we last sent a typing:notify
+    pub last_typing_notify: Option<Instant>,
+    /// The editing target we last sent a typing:notify for (used to detect context switches)
+    pub last_typing_target: Option<InputTarget>,
+    /// Active typing indicators from peers: (thread_uuid, reply_to_uuid)
+    pub typing_indicators: HashSet<(Option<String>, Option<String>)>,
+    /// When the last typing:active was received (for expiry)
+    pub typing_indicators_updated: Option<Instant>,
     /// When true, run loop spawns an invite-list fetch
     pub pending_list_invites: bool,
 }
@@ -342,6 +350,10 @@ impl AppState {
             pending_leave_chat: false,
             pending_add_member: None,
             pending_list_invites: false,
+            last_typing_notify: None,
+            last_typing_target: None,
+            typing_indicators: HashSet::new(),
+            typing_indicators_updated: None,
         }
     }
 
@@ -358,6 +370,47 @@ impl AppState {
             msg.into(),
             Instant::now() + std::time::Duration::from_secs(secs),
         ));
+    }
+
+    pub fn maybe_send_typing_notify(&mut self) {
+        let editing = match self.active_pane().editing.clone() {
+            Some(e) => e,
+            None => return,
+        };
+
+        // Bypass cooldown when this is a fresh or changed editing context so the
+        // indicator appears immediately. Apply the 5s cooldown only within the
+        // same continuous typing session.
+        let same_target = self.last_typing_target.as_ref() == Some(&editing);
+        if same_target {
+            if let Some(last) = self.last_typing_notify {
+                if last.elapsed().as_secs() < 5 {
+                    return;
+                }
+            }
+        }
+
+        let (thread_uuid, reply_to_uuid) = match &editing {
+            InputTarget::MainChat => (None, None),
+            InputTarget::Thread(root) => (Some(root.clone()), None),
+            InputTarget::Reply(reply_uuid, thread) => {
+                (Some(thread.clone()), Some(reply_uuid.clone()))
+            }
+        };
+
+        let frame = match &self.chat_channel {
+            Some(ch) => ch.typing_notify_frame(thread_uuid.as_deref(), reply_to_uuid.as_deref()),
+            None => return,
+        };
+
+        let _ = self.ws_tx.send(frame.encode());
+        self.last_typing_notify = Some(Instant::now());
+        self.last_typing_target = Some(editing);
+        dlog!(
+            "typing:notify sent thread={:?} reply_to={:?}",
+            thread_uuid,
+            reply_to_uuid
+        );
     }
 
     pub fn move_selection(&mut self, delta: i32) {
@@ -493,25 +546,28 @@ impl AppState {
                 self.msg_store.expanded.insert(uuid);
             }
             Some(RenderRow::Message {
-                uuid, thread_uuid, ..
+                uuid,
+                thread_uuid,
+                reply_to_uuid,
+                ..
             }) => {
                 let uuid = uuid.clone();
                 let thread_uuid = thread_uuid.clone();
+                let reply_to_uuid = reply_to_uuid.clone();
                 if let Some(root) = &thread_uuid {
-                    // Depth-1 message: check if it's a direct thread reply (no reply_to)
-                    // and if so, start a depth-2 reply targeting it.
-                    if self
-                        .msg_store
-                        .by_uuid
-                        .get(uuid.as_str())
-                        .map(|m| m.reply_to_uuid.is_none())
-                        .unwrap_or(false)
-                    {
+                    if let Some(parent) = reply_to_uuid {
+                        // Depth-2 message: focus the depth-2 reply input for this parent.
                         let root = root.clone();
                         self.msg_store.expanded.insert(root.clone());
-                        self.panes[self.active_pane].editing = Some(InputTarget::Reply(uuid, root));
+                        self.panes[self.active_pane].editing =
+                            Some(InputTarget::Reply(parent, root));
                         return;
                     }
+                    // Depth-1 message: start a depth-2 reply targeting it.
+                    let root = root.clone();
+                    self.msg_store.expanded.insert(root.clone());
+                    self.panes[self.active_pane].editing = Some(InputTarget::Reply(uuid, root));
+                    return;
                 }
                 // Top-level message: expand thread and focus thread input.
                 let root = thread_uuid.unwrap_or(uuid);
@@ -532,7 +588,7 @@ impl AppState {
                 };
                 self.panes[self.active_pane].editing = Some(target);
             }
-            None => {}
+            Some(RenderRow::TypingIndicator { .. }) | None => {}
         }
     }
 
@@ -948,6 +1004,10 @@ impl AppState {
         self.members.clear();
         self.mode = Mode::Chat;
         self.last_acked = 0;
+        self.typing_indicators.clear();
+        self.typing_indicators_updated = None;
+        self.last_typing_notify = None;
+        self.last_typing_target = None;
 
         // Seed display from local SQLite history
         self.seed_from_sqlite();
@@ -1065,6 +1125,21 @@ impl AppState {
                             Err(e) => dlog!("sync error: {}", e),
                         }
                     }
+                }
+            }
+            "typing:active" => {
+                if let Some(entries) = frame.payload["entries"].as_array() {
+                    let my_uuid = self.my_uuid.clone();
+                    self.typing_indicators = entries
+                        .iter()
+                        .filter(|e| e["user_uuid"].as_str().unwrap_or("") != my_uuid.as_str())
+                        .map(|e| {
+                            let thread = e["thread_uuid"].as_str().map(|s| s.to_string());
+                            let reply = e["reply_to_uuid"].as_str().map(|s| s.to_string());
+                            (thread, reply)
+                        })
+                        .collect();
+                    self.typing_indicators_updated = Some(Instant::now());
                 }
             }
             _ => {}
@@ -1270,6 +1345,12 @@ impl AppState {
                 self.toast = None;
             }
         }
+        if let Some(updated) = self.typing_indicators_updated {
+            if updated.elapsed().as_secs() >= 7 {
+                self.typing_indicators.clear();
+                self.typing_indicators_updated = None;
+            }
+        }
     }
 
     pub fn handle_chat_added(
@@ -1371,6 +1452,10 @@ impl AppState {
             if reply_count > 0 && !is_expanded {
                 // Collapsed thread
                 let preview: String = msg.body.chars().take(40).collect();
+                let typing_active = self
+                    .typing_indicators
+                    .iter()
+                    .any(|(t, _)| t.as_deref() == Some(top_uuid.as_str()));
                 rows.push(RenderRow::CollapsedThread {
                     uuid: top_uuid.clone(),
                     author: display_name(&msg.sender_uuid, &msg.sender_name),
@@ -1379,6 +1464,7 @@ impl AppState {
                     preview,
                     reply_count,
                     timestamp: format_timestamp(&msg.timestamp),
+                    typing_active,
                 });
             } else {
                 rows.push(RenderRow::Message {
@@ -1394,6 +1480,7 @@ impl AppState {
                     is_pending: msg.pending,
                     highlight_age: self.highlights.get(top_uuid).map(|i| i.elapsed()),
                     collapsed_sub_count: None,
+                    sub_typing_active: false,
                 });
 
                 // Thread replies if expanded
@@ -1439,6 +1526,10 @@ impl AppState {
                             } else {
                                 None
                             };
+                        let sub_typing_active = self
+                            .typing_indicators
+                            .iter()
+                            .any(|(_, r)| r.as_deref() == Some(reply_uuid.as_str()));
                         rows.push(RenderRow::Message {
                             uuid: reply_uuid.to_string(),
                             author: display_name(&reply.sender_uuid, &reply.sender_name),
@@ -1452,6 +1543,7 @@ impl AppState {
                             is_pending: reply.pending,
                             highlight_age: self.highlights.get(*reply_uuid).map(|i| i.elapsed()),
                             collapsed_sub_count,
+                            sub_typing_active,
                         });
 
                         // Depth-2 replies — only shown when the subthread is not collapsed.
@@ -1480,7 +1572,16 @@ impl AppState {
                                         .get(*sub_uuid)
                                         .map(|i| i.elapsed()),
                                     collapsed_sub_count: None,
+                                    sub_typing_active: false,
                                 });
+                            }
+
+                            // Depth-2 typing indicator (before the reply input)
+                            if self.typing_indicators.contains(&(
+                                Some(top_uuid.clone()),
+                                Some(reply_uuid.to_string()),
+                            )) {
+                                rows.push(RenderRow::TypingIndicator { indent: 2 });
                             }
 
                             // Inline depth-2 reply input if active for this depth-1 message
@@ -1502,6 +1603,14 @@ impl AppState {
                         }
                     }
 
+                    // Depth-1 typing indicator (before the thread input)
+                    if self
+                        .typing_indicators
+                        .contains(&(Some(top_uuid.clone()), None))
+                    {
+                        rows.push(RenderRow::TypingIndicator { indent: 1 });
+                    }
+
                     // Thread input prompt at depth-1
                     let thread_input_target = InputTarget::Thread(top_uuid.clone());
                     let is_editing = pane.editing.as_ref() == Some(&thread_input_target);
@@ -1518,6 +1627,11 @@ impl AppState {
                     });
                 }
             }
+        }
+
+        // Top-level typing indicator (before main chat input)
+        if self.typing_indicators.contains(&(None, None)) {
+            rows.push(RenderRow::TypingIndicator { indent: 0 });
         }
 
         // Main chat input at bottom
@@ -1567,6 +1681,8 @@ pub enum RenderRow {
         highlight_age: Option<std::time::Duration>,
         /// For depth-1 messages with a collapsed subthread, the number of hidden depth-2 replies.
         collapsed_sub_count: Option<usize>,
+        /// True when peers are typing in this depth-1 message's collapsed subthread.
+        sub_typing_active: bool,
     },
     CollapsedThread {
         uuid: String,
@@ -1576,6 +1692,8 @@ pub enum RenderRow {
         preview: String,
         reply_count: u32,
         timestamp: String,
+        /// True when peers are typing anywhere in this collapsed thread.
+        typing_active: bool,
     },
     Input {
         thread_uuid: Option<String>,
@@ -1583,5 +1701,8 @@ pub enum RenderRow {
         indent: u8,
         is_active: bool,
         content: String,
+    },
+    TypingIndicator {
+        indent: u8,
     },
 }

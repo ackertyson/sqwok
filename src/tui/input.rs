@@ -177,6 +177,7 @@ fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
                 if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
             {
                 app.active_pane_mut().push_char(c);
+                app.maybe_send_typing_notify();
                 Action::Continue
             }
             KeyCode::Backspace => {

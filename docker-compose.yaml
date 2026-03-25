@@ -1,13 +1,12 @@
 services:
     sqwok:
         image: local/sqwok:latest
-        build: ./
+        build: .
         environment:
             SQWOK_SERVER: http://host.docker.internal:4000 # https://api.sqwok.io
         volumes:
             - sqwok-data:/home/sqwok/.sqwok
             - sqwok-identity:/home/sqwok/.local/share/sqwok
-            # - ~/.sqwok:/home/sqwok/.sqwok # only used if user runs sqwok in Docker instead of installed on host
 
 volumes:
     sqwok-data:

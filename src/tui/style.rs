@@ -107,6 +107,10 @@ pub fn warning_color() -> Color {
     color((230, 180, 80), 214)
 }
 #[inline]
+pub fn typing_color() -> Color {
+    color((230, 180, 80), 214)
+}
+#[inline]
 pub fn overlay_bg() -> Color {
     color((15, 15, 25), 233)
 }

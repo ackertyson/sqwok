@@ -325,6 +325,19 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
     };
 
     match row {
+        RenderRow::TypingIndicator { indent } => {
+            let indent_str = build_indent(*indent);
+            let line = Line::from(vec![
+                Span::styled(indent_str, Style::default().fg(s::dim())),
+                Span::styled(
+                    "...",
+                    Style::default()
+                        .fg(s::typing_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), area);
+        }
         RenderRow::Message {
             author,
             author_uuid,
@@ -336,6 +349,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             highlight_age,
             reply_to_uuid,
             collapsed_sub_count,
+            sub_typing_active,
             ..
         } => {
             let actual_bg = if is_selected {
@@ -387,6 +401,14 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 if let Some(ref tag) = replies_tag {
                     v.push(Span::raw("  "));
                     v.push(Span::styled(tag.clone(), Style::default().fg(s::accent())));
+                    if *sub_typing_active {
+                        v.push(Span::styled(
+                            " ...",
+                            Style::default()
+                                .fg(s::typing_color())
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
                 }
                 v.push(Span::styled(
                     ts_suffix.clone(),
@@ -444,6 +466,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             preview,
             reply_count,
             timestamp,
+            typing_active,
             ..
         } => {
             let author_color = if *is_mine {
@@ -451,7 +474,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             } else {
                 s::username_color(author_uuid)
             };
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     author.clone(),
                     Style::default()
@@ -465,9 +488,21 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                     format!("[{} replies]", reply_count),
                     Style::default().fg(s::accent()),
                 ),
-                Span::raw("  "),
-                Span::styled(timestamp.clone(), Style::default().fg(s::dim())),
-            ]);
+            ];
+            if *typing_active {
+                spans.push(Span::styled(
+                    " ...",
+                    Style::default()
+                        .fg(s::typing_color())
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                timestamp.clone(),
+                Style::default().fg(s::dim()),
+            ));
+            let line = Line::from(spans);
             frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), area);
         }
         RenderRow::Input {

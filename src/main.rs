@@ -13,8 +13,8 @@ use tokio::sync::mpsc;
 
 use tui::app::{AppState, ChatSummary, Invitation};
 
-const LOGO_256: &str = include_str!("../logo_256.txt");
-const LOGO_TRUE: &str = include_str!("../logo_truecolor.txt");
+const LOGO_256: &str = include_str!("../assets/logo_256.txt");
+const LOGO_TRUE: &str = include_str!("../assets/logo_truecolor.txt");
 
 #[derive(clap::Parser)]
 #[command(
@@ -368,16 +368,16 @@ fn print_help() {
     const R: &str = "\x1b[0m";
 
     let lines = vec![
-        format!("{BOLD}sqwok{R} v{VERSION} — terminal group chat with E2E encryption"),
+        format!("{BOLD}sqwok{R} v{VERSION} — terminal chat app with E2E encryption"),
         String::new(),
         format!("{GREEN}Usage:{R}"),
-        format!("  {BOLD}sqwok{R}                   Open the chat picker"),
+        format!("  {BOLD}sqwok{R}                   Run chat client"),
         format!("  {BOLD}sqwok new{R} {BOLD}<TOPIC>{R}       Create a new chat"),
         format!("  {BOLD}sqwok join{R} {BOLD}<CODE>{R}       Join via invite code"),
         String::new(),
         format!("{GREEN}Options:{R}"),
         format!("  {BOLD}--server{R} {DIM}<URL>{R}          Server URL {DIM}(overrides $SQWOK_SERVER){R}"),
-        format!("  {BOLD}--identity{R} {DIM}<DIR>{R}         Identity directory {DIM}(overrides default){R}"),
+        format!("  {BOLD}--identity{R} {DIM}<DIR>{R}        Identity directory {DIM}(overrides default){R}"),
         format!("  {BOLD}-h{R}, {BOLD}--help{R}              Show this help"),
     ];
 
