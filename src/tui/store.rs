@@ -12,6 +12,9 @@ pub struct DisplayMessage {
     pub reply_to_uuid: Option<String>,
     /// True for optimistically-displayed messages awaiting server ack.
     pub pending: bool,
+    /// False until the user explicitly focuses this message with the cursor.
+    /// Own outgoing messages start as true (never need to be "read").
+    pub read: bool,
 }
 
 /// In-memory display store for the TUI

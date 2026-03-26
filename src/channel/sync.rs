@@ -51,7 +51,8 @@ mod tests {
                 key_epoch INTEGER NOT NULL DEFAULT 0,
                 ciphertext TEXT NOT NULL,
                 client_ts TEXT NOT NULL,
-                server_ts TEXT NOT NULL
+                server_ts TEXT NOT NULL,
+                read INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX idx_messages_global_seq ON messages(global_seq);
             CREATE INDEX idx_messages_thread ON messages(thread_uuid);

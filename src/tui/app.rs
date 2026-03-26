@@ -329,6 +329,28 @@ impl AppState {
             .clamp(0, row_count as i32 - 1) as usize;
         self.panes[self.active_pane].selected = new_sel;
 
+        // Mark message as read when the cursor lands on it
+        let uuid_to_mark = if let Some(RenderRow::Message {
+            uuid, is_unread, ..
+        }) = rows.get(new_sel)
+        {
+            if *is_unread {
+                Some(uuid.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(ref uuid) = uuid_to_mark {
+            if let Some(msg) = self.msg_store.by_uuid.get_mut(uuid) {
+                msg.read = true;
+            }
+            if let Some(ref ch) = self.chat_channel {
+                let _ = ch.store.mark_read(uuid);
+            }
+        }
+
         // Auto-focus input rows when navigated to
         if let Some(RenderRow::Input {
             thread_uuid,
@@ -379,15 +401,33 @@ impl AppState {
             }
             None
         });
+        // Top-level message (no thread_uuid): right arrow starts/enters the thread.
+        let start_thread = rows.get(selected).and_then(|r| {
+            if let RenderRow::Message {
+                uuid,
+                thread_uuid: None,
+                ..
+            } = r
+            {
+                Some(uuid.clone())
+            } else {
+                None
+            }
+        });
         drop(rows);
 
         if let Some(uuid) = expand_top {
+            // Has existing replies: just expand, let the user navigate in.
             self.panes[self.active_pane].expanded.insert(uuid);
         } else if let Some(uuid) = expand_sub {
             // Re-expand a collapsed subthread.
             self.panes[self.active_pane].collapsed_subs.remove(&uuid);
+        } else if let Some(uuid) = start_thread {
+            // No thread yet (or thread already expanded): expand and focus the thread input.
+            self.panes[self.active_pane].expanded.insert(uuid.clone());
+            self.panes[self.active_pane].editing = Some(InputTarget::Thread(uuid));
         } else {
-            // On a depth-1 message with an expanded subthread, right arrow initiates a depth-2 reply.
+            // Depth-1 message with expanded subthread: initiate a depth-2 reply.
             self.reply_to_selected();
         }
     }
@@ -461,9 +501,9 @@ impl AppState {
         let rows = self.build_render_rows();
         let selected = self.panes[self.active_pane].selected;
         match rows.get(selected) {
-            Some(RenderRow::CollapsedThread { uuid, .. }) => {
-                let uuid = uuid.clone();
-                self.panes[self.active_pane].expanded.insert(uuid);
+            Some(RenderRow::CollapsedThread { .. }) => {
+                // Depth-0: stay at depth-0, focus the main chat input.
+                self.panes[self.active_pane].editing = Some(InputTarget::MainChat);
             }
             Some(RenderRow::Message {
                 uuid,
@@ -483,16 +523,13 @@ impl AppState {
                             Some(InputTarget::Reply(parent, root));
                         return;
                     }
-                    // Depth-1 message: start a depth-2 reply targeting it.
-                    let root = root.clone();
-                    self.panes[self.active_pane].expanded.insert(root.clone());
-                    self.panes[self.active_pane].editing = Some(InputTarget::Reply(uuid, root));
+                    // Depth-1 message: focus the thread input at the bottom.
+                    self.panes[self.active_pane].editing = Some(InputTarget::Thread(root.clone()));
                     return;
                 }
-                // Top-level message: expand thread and focus thread input.
-                let root = thread_uuid.unwrap_or(uuid);
-                self.panes[self.active_pane].expanded.insert(root.clone());
-                self.panes[self.active_pane].editing = Some(InputTarget::Thread(root));
+                // Depth-0 message: focus the main chat input.
+                let _ = uuid;
+                self.panes[self.active_pane].editing = Some(InputTarget::MainChat);
             }
             Some(RenderRow::Input {
                 thread_uuid,
@@ -620,10 +657,19 @@ impl AppState {
                         thread_uuid: thread_uuid.clone(),
                         reply_to_uuid: reply_to_uuid.clone(),
                         pending: true,
+                        read: true,
                     };
                     self.highlights.insert(msg_uuid, Instant::now());
                     self.msg_store.insert(msg);
                     // Auto-scroll: stay in the current thread context after sending.
+                    // Depth-2 reply inputs are only rendered while editing, so we must
+                    // restore the editing target before rebuilding rows; otherwise the
+                    // Input row won't appear in the list and the lookup falls back to the
+                    // bottom of the main chat. Depth-1 thread inputs always render, so
+                    // this is a no-op for that case (editing was already cleared by take_input).
+                    if matches!(&editing_target, Some(InputTarget::Reply(..))) {
+                        self.panes[self.active_pane].editing = editing_target.clone();
+                    }
                     // Find the input row matching the context we just sent from.
                     let rows = self.build_render_rows();
                     let target_idx = rows.iter().position(|r| {
@@ -845,6 +891,11 @@ impl AppState {
             .cloned()
             .unwrap_or_else(|| sender_uuid.chars().take(8).collect());
 
+        let read = payload["read"]
+            .as_i64()
+            .map(|v| v != 0)
+            .unwrap_or_else(|| sender_uuid == self.my_uuid);
+
         DisplayMessage {
             uuid,
             sender_uuid,
@@ -855,6 +906,7 @@ impl AppState {
             thread_uuid,
             reply_to_uuid,
             pending: false,
+            read,
         }
     }
 
@@ -1123,12 +1175,20 @@ impl AppState {
 
         let msg = self.parse_message_payload(payload);
         let uuid = msg.uuid.clone();
+        let is_own = msg.read;
 
         // If this UUID was optimistically inserted as pending, confirm it
         if let Some(existing) = self.msg_store.by_uuid.get_mut(&uuid) {
             existing.pending = false;
             existing.global_seq = msg.global_seq;
             existing.body = msg.body;
+
+            // Persist read=1 for own messages (SQLite defaults to 0 on insert)
+            if is_own {
+                if let Some(ref ch) = self.chat_channel {
+                    let _ = ch.store.mark_read(&uuid);
+                }
+            }
 
             // Update position in top_level now that we have the real global_seq
             if msg.thread_uuid.is_none() {
@@ -1152,6 +1212,12 @@ impl AppState {
             return;
         }
 
+        // Persist read=1 for own messages arriving from another session
+        if is_own {
+            if let Some(ref ch) = self.chat_channel {
+                let _ = ch.store.mark_read(&uuid);
+            }
+        }
         self.highlights.insert(uuid, Instant::now());
         self.msg_store.insert(msg);
     }

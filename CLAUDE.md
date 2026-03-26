@@ -23,9 +23,9 @@ CLI usage: `sqwok` (interactive), `sqwok new "Topic" [--description "Desc"]` (cr
 
 ## Core principles
 
-1. self reliance: prefer simple self-rolled implementations over 3rd-party solutions
-2. simplicity: don't reach for complex solutions when a succinct approach will do the job
-3. UX is king: our UI should be elegant, intuitive and powerful
+1. self reliance: prefer self-rolled implementations over 3rd-party solutions
+2. simplicity: don't reach for complex solutions when a succinct approach will do the job *unless the additional complexity adds real value*
+3. UX is king: our UI should be snapy, elegant, intuitive and powerful
 
 ## Architecture
 

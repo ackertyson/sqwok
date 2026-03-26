@@ -162,22 +162,49 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
         last_rendered_row = abs_idx;
     }
 
-    // Scroll-down indicator: count only message rows below the viewport.
+    // Unread-above indicator: count unread rows hidden above the viewport.
+    let unread_above = rows[..scroll_offset]
+        .iter()
+        .filter(|r| match r {
+            RenderRow::Message { is_unread, .. } => *is_unread,
+            RenderRow::CollapsedThread { is_unread, .. } => *is_unread,
+            _ => false,
+        })
+        .count();
+    if unread_above > 0 {
+        let text = format!("↑ {} new", unread_above);
+        let w = text.chars().count() as u16 + 1;
+        let indicator = Paragraph::new(text).style(
+            Style::default()
+                .fg(s::accent())
+                .add_modifier(Modifier::BOLD),
+        );
+        let ind_area = Rect::new(area.x + area.width.saturating_sub(w), area.y, w, 1);
+        frame.render_widget(indicator, ind_area);
+    }
+
+    // Unread-below indicator: count unread rows hidden below the viewport.
     if last_rendered_row + 1 < total_rows {
-        let msg_below = rows[last_rendered_row + 1..]
+        let unread_below = rows[last_rendered_row + 1..]
             .iter()
-            .filter(|r| matches!(r, RenderRow::Message { .. }))
+            .filter(|r| match r {
+                RenderRow::Message { is_unread, .. } => *is_unread,
+                RenderRow::CollapsedThread { is_unread, .. } => *is_unread,
+                _ => false,
+            })
             .count();
-        if msg_below > 0 {
-            let indicator = Paragraph::new(format!("↓ {}", msg_below)).style(
+        if unread_below > 0 {
+            let text = format!("↓ {} new", unread_below);
+            let w = text.chars().count() as u16 + 1;
+            let indicator = Paragraph::new(text).style(
                 Style::default()
                     .fg(s::accent())
                     .add_modifier(Modifier::BOLD),
             );
             let ind_area = Rect::new(
-                area.x + area.width.saturating_sub(8),
+                area.x + area.width.saturating_sub(w),
                 area.y + area.height.saturating_sub(1),
-                7,
+                w,
                 1,
             );
             frame.render_widget(indicator, ind_area);
@@ -383,16 +410,15 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             reply_to_uuid,
             collapsed_sub_count,
             sub_typing_active,
+            is_unread,
             ..
         } => {
             let actual_bg = if is_selected {
                 s::selection_bg()
-            } else if let Some(age) = highlight_age {
-                if age.as_millis() < 1000 {
-                    s::highlight_bg()
-                } else {
-                    s::BG
-                }
+            } else if highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false) {
+                s::highlight_bg()
+            } else if *is_unread {
+                s::unread_bg()
             } else {
                 s::BG
             };
@@ -513,8 +539,16 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             reply_count,
             timestamp,
             typing_active,
+            is_unread,
             ..
         } => {
+            let actual_bg = if is_selected {
+                s::selection_bg()
+            } else if *is_unread {
+                s::unread_bg()
+            } else {
+                s::BG
+            };
             let author_color = *author_color;
             let mut spans = vec![
                 Span::styled(
@@ -545,7 +579,10 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 Style::default().fg(s::dim()),
             ));
             let line = Line::from(spans);
-            frame.render_widget(Paragraph::new(line).style(Style::default().bg(bg)), area);
+            frame.render_widget(
+                Paragraph::new(line).style(Style::default().bg(actual_bg)),
+                area,
+            );
         }
         RenderRow::Input {
             thread_uuid,

@@ -32,6 +32,8 @@ pub enum RenderRow {
         sub_typing_active: bool,
         /// Thread indicator for the left-margin gutter.
         gutter: Gutter,
+        /// True when this message (or any hidden reply within a collapsed sub) is unread.
+        is_unread: bool,
     },
     CollapsedThread {
         uuid: String,
@@ -42,6 +44,8 @@ pub enum RenderRow {
         timestamp: String,
         /// True when peers are typing anywhere in this collapsed thread.
         typing_active: bool,
+        /// True when the header or any hidden reply in this thread is unread.
+        is_unread: bool,
     },
     Input {
         thread_uuid: Option<String>,
@@ -108,6 +112,15 @@ pub fn build(
             let typing_active = typing_indicators
                 .iter()
                 .any(|(t, _)| t.as_deref() == Some(top_uuid.as_str()));
+            let has_unread_replies = msg_store
+                .threads
+                .get(top_uuid)
+                .map(|replies| {
+                    replies
+                        .iter()
+                        .any(|r| msg_store.by_uuid.get(r).map(|m| !m.read).unwrap_or(false))
+                })
+                .unwrap_or(false);
             rows.push(RenderRow::CollapsedThread {
                 uuid: top_uuid.clone(),
                 author: display_name(&msg.sender_uuid, &msg.sender_name),
@@ -116,6 +129,7 @@ pub fn build(
                 reply_count,
                 timestamp: format_timestamp(&msg.timestamp),
                 typing_active,
+                is_unread: !msg.read || has_unread_replies,
             });
         } else {
             let top_gutter = if reply_count > 0 {
@@ -137,6 +151,7 @@ pub fn build(
                 collapsed_sub_count: None,
                 sub_typing_active: false,
                 gutter: top_gutter,
+                is_unread: !msg.read,
             });
 
             // Thread replies if expanded
@@ -192,6 +207,17 @@ pub fn build(
                     } else {
                         Gutter::None
                     };
+                    let has_unread_collapsed_subs = collapsed_sub_count.is_some()
+                        && d2_uuids.iter().any(|u| {
+                            msg_store
+                                .by_uuid
+                                .get(u.as_str())
+                                .map(|m| {
+                                    m.reply_to_uuid.as_deref() == Some(reply_uuid.as_str())
+                                        && !m.read
+                                })
+                                .unwrap_or(false)
+                        });
                     rows.push(RenderRow::Message {
                         uuid: reply_uuid.to_string(),
                         author: display_name(&reply.sender_uuid, &reply.sender_name),
@@ -206,6 +232,7 @@ pub fn build(
                         collapsed_sub_count,
                         sub_typing_active,
                         gutter: d1_gutter,
+                        is_unread: !reply.read || has_unread_collapsed_subs,
                     });
 
                     // Depth-2 replies — only shown when the subthread is not collapsed.
@@ -232,6 +259,7 @@ pub fn build(
                                 collapsed_sub_count: None,
                                 sub_typing_active: false,
                                 gutter: Gutter::None,
+                                is_unread: !sub.read,
                             });
                         }
 

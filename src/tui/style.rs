@@ -89,6 +89,10 @@ pub fn highlight_bg() -> Color {
     color((40, 40, 65), 236)
 }
 #[inline]
+pub fn unread_bg() -> Color {
+    color((45, 32, 0), 237)
+}
+#[inline]
 pub fn error_color() -> Color {
     color((220, 80, 80), 167)
 }

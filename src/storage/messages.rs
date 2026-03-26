@@ -17,6 +17,7 @@ fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<Value> {
         "ciphertext": row.get::<_, String>(6)?,
         "ts": row.get::<_, String>(7)?,
         "server_ts": row.get::<_, String>(8)?,
+        "read": row.get::<_, i64>(9)?,
     }))
 }
 
@@ -56,6 +57,12 @@ impl MessageStore {
         ",
         )?;
 
+        // Migration: add `read` column if this is an existing DB without it.
+        let _ = conn.execute(
+            "ALTER TABLE messages ADD COLUMN read INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+
         Ok(MessageStore { conn })
     }
 
@@ -80,6 +87,14 @@ impl MessageStore {
         Ok(())
     }
 
+    pub fn mark_read(&self, uuid: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET read = 1 WHERE uuid = ?1",
+            rusqlite::params![uuid],
+        )?;
+        Ok(())
+    }
+
     pub fn get_high_water(&self) -> Result<i64> {
         let hw: i64 = self.conn.query_row(
             "SELECT COALESCE(MAX(global_seq), 0) FROM messages",
@@ -92,7 +107,7 @@ impl MessageStore {
     pub fn get_range(&self, from_seq: i64, to_seq: i64) -> Result<Vec<Value>> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, sender_uuid, thread_uuid, reply_to_uuid, global_seq,
-                    key_epoch, ciphertext, client_ts, server_ts
+                    key_epoch, ciphertext, client_ts, server_ts, read
              FROM messages
              WHERE global_seq >= ?1 AND global_seq <= ?2
              ORDER BY global_seq",
@@ -130,7 +145,7 @@ impl MessageStore {
         // First get recent top-level messages
         let mut stmt = self.conn.prepare(
             "SELECT uuid, sender_uuid, thread_uuid, reply_to_uuid, global_seq,
-                    key_epoch, ciphertext, client_ts, server_ts
+                    key_epoch, ciphertext, client_ts, server_ts, read
              FROM messages
              WHERE thread_uuid IS NULL
              ORDER BY global_seq DESC
@@ -159,7 +174,7 @@ impl MessageStore {
     pub fn get_before(&self, before_seq: i64, limit: i64) -> Result<Vec<Value>> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, sender_uuid, thread_uuid, reply_to_uuid, global_seq,
-                    key_epoch, ciphertext, client_ts, server_ts
+                    key_epoch, ciphertext, client_ts, server_ts, read
              FROM messages
              WHERE thread_uuid IS NULL AND global_seq < ?1
              ORDER BY global_seq DESC
@@ -192,7 +207,7 @@ impl MessageStore {
             .collect();
         let sql = format!(
             "SELECT uuid, sender_uuid, thread_uuid, reply_to_uuid, global_seq,
-                    key_epoch, ciphertext, client_ts, server_ts
+                    key_epoch, ciphertext, client_ts, server_ts, read
              FROM messages
              WHERE thread_uuid IN ({})
              ORDER BY global_seq",
@@ -226,7 +241,8 @@ mod tests {
                 key_epoch INTEGER NOT NULL DEFAULT 0,
                 ciphertext TEXT NOT NULL,
                 client_ts TEXT NOT NULL,
-                server_ts TEXT NOT NULL
+                server_ts TEXT NOT NULL,
+                read INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX idx_messages_global_seq ON messages(global_seq);
             CREATE INDEX idx_messages_thread ON messages(thread_uuid);
