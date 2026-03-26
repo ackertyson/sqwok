@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use super::{
-    app::{AppState, ConnStatus, ModalKind, Mode, PaneSplit},
+    app::{AppState, ConnStatus, ModalState, Mode, PaneSplit},
     style as s, views,
 };
 
@@ -81,39 +81,22 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
         }
     }
 
-    // Overlays
-    // We need to match on the modal kind without holding a borrow on app
-    let modal_kind = app.modal.as_ref().map(|m| match m {
-        ModalKind::MemberList => 0u8,
-        ModalKind::GroupSettings => 1,
-        ModalKind::InviteCreate => 2,
-        ModalKind::Search => 3,
-        ModalKind::Contacts => 4,
-    });
-
-    if let Some(kind) = modal_kind {
-        match kind {
-            0 => views::member_list::draw(frame, app),
-            1 => views::group_settings::draw(frame, app),
-            2 => {
-                if let Some(ref inv_state) = app.invite_modal {
-                    let inv_state_clone = inv_state.clone();
-                    views::invite::draw(frame, &inv_state_clone);
-                }
+    // Overlays — for variants that pass &AppState to draw, release the borrow
+    // first by checking via matches! before calling into the view.
+    let is_member_list = matches!(app.modal, Some(ModalState::MemberList));
+    let is_group_settings = matches!(app.modal, Some(ModalState::GroupSettings));
+    if is_member_list {
+        views::member_list::draw(frame, app);
+    } else if is_group_settings {
+        views::group_settings::draw(frame, app);
+    } else {
+        match &app.modal {
+            Some(ModalState::InviteCreate(s)) => {
+                let s_clone = s.clone();
+                views::invite::draw(frame, &s_clone);
             }
-            3 => {
-                // Search modal is available from both ChatPicker and Chat modes
-                if let Some(ref search_state) = app.search_modal {
-                    // We can't clone SearchModalState (contains non-Clone SearchResult)
-                    // but we can call draw with a shared ref safely
-                    views::search::draw(frame, search_state);
-                }
-            }
-            4 => {
-                if let Some(ref contacts_state) = app.contacts_modal {
-                    views::contacts::draw(frame, contacts_state);
-                }
-            }
+            Some(ModalState::Search(s)) => views::search::draw(frame, s),
+            Some(ModalState::Contacts(s)) => views::contacts::draw(frame, s),
             _ => {}
         }
     }

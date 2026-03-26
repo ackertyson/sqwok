@@ -62,17 +62,19 @@ If you lose your device and need to re-register on a new one, run `sqwok` and ch
 
 | Key | Action |
 |---|---|
-| `↑` / `↓` | Move selection between messages and input prompts |
+| `↑` / `↓` | Move selection between messages |
 | `→` | Expand a collapsed thread |
 | `←` | Collapse an expanded thread |
 | `Enter` | Focus a message's thread input; send from an active input |
+| `r` | Reply to the selected message |
 | `Alt+←` / `Alt+→` | Switch pane focus |
-| `Alt+N` | Open a new pane (horizontal split) |
+| `Alt+\` | Split pane vertically |
+| `Alt+-` | Split pane horizontally |
 | `Alt+W` | Close the current pane |
-| `Tab` | Cycle between input fields within a pane |
 | `/` | Open command bar |
+| `Tab` | Cycle command bar suggestions |
 | `Esc` | Dismiss command bar or modal |
-| `G` / `End` | Jump to latest messages |
+| `Shift+G` / `End` | Jump to latest messages |
 
 Max thread depth is 2 (message → reply → sub-reply).
 

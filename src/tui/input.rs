@@ -1,6 +1,6 @@
 use crossterm::event::{Event as CtEvent, KeyCode, KeyModifiers};
 
-use super::app::{AppState, ContactsModalState, ModalKind, Mode, SearchModalState};
+use super::app::{AppState, ContactsModalState, ModalState, Mode, SearchModalState};
 use super::views::command_bar::{CommandAction, CommandBarState};
 
 pub enum Action {
@@ -260,55 +260,56 @@ fn handle_modal(app: &mut AppState, event: CtEvent) -> Action {
     match event {
         CtEvent::Key(key) => {
             // Delegate to invite modal
-            if let Some(ModalKind::InviteCreate) = &app.modal {
-                if let Some(ref mut inv_state) = app.invite_modal {
-                    let close = super::views::invite::handle_input(key, inv_state);
-                    if close {
-                        app.modal = None;
-                        app.invite_modal = None;
-                    }
+            if matches!(&app.modal, Some(ModalState::InviteCreate(_))) {
+                let close = if let Some(ModalState::InviteCreate(ref mut s)) = app.modal {
+                    super::views::invite::handle_input(key, s)
+                } else {
+                    false
+                };
+                if close {
+                    app.modal = None;
                 }
                 return Action::Continue;
             }
 
             // Delegate to search modal
-            if let Some(ModalKind::Search) = &app.modal {
-                if let Some(ref mut search_state) = app.search_modal {
-                    use super::views::search::{handle_input as search_input, SearchAction};
-                    match search_input(key, search_state) {
-                        SearchAction::Close => {
-                            app.modal = None;
-                            app.search_modal = None;
+            if matches!(&app.modal, Some(ModalState::Search(_))) {
+                use super::views::search::{handle_input as search_input, SearchAction};
+                let action = if let Some(ModalState::Search(ref mut s)) = app.modal {
+                    Some(search_input(key, s))
+                } else {
+                    None
+                };
+                match action {
+                    Some(SearchAction::Close) => app.modal = None,
+                    Some(SearchAction::SelectUser(uuid)) => {
+                        let chat_uuid = app.current_chat.clone();
+                        if let Some(ref cu) = chat_uuid {
+                            app.pending_add_member = Some((cu.clone(), uuid.to_string()));
                         }
-                        SearchAction::SelectUser(uuid) => {
-                            // Add user to current chat via member API
-                            if let Some(ref chat_uuid) = app.current_chat {
-                                app.pending_add_member =
-                                    Some((chat_uuid.clone(), uuid.to_string()));
-                            }
-                            app.modal = None;
-                            app.search_modal = None;
-                        }
-                        SearchAction::QueryChanged | SearchAction::Continue => {}
+                        app.modal = None;
                     }
+                    Some(SearchAction::QueryChanged) | Some(SearchAction::Continue) | None => {}
                 }
                 return Action::Continue;
             }
 
             // Delegate to contacts modal
-            if let Some(ModalKind::Contacts) = &app.modal {
-                if let Some(ref mut contacts_state) = app.contacts_modal {
-                    use super::views::contacts::{handle_input as contacts_input, ContactsAction};
-                    if matches!(contacts_input(key, contacts_state), ContactsAction::Close) {
-                        app.modal = None;
-                        app.contacts_modal = None;
-                    }
+            if matches!(&app.modal, Some(ModalState::Contacts(_))) {
+                use super::views::contacts::{handle_input as contacts_input, ContactsAction};
+                let close = if let Some(ModalState::Contacts(ref mut s)) = app.modal {
+                    matches!(contacts_input(key, s), ContactsAction::Close)
+                } else {
+                    false
+                };
+                if close {
+                    app.modal = None;
                 }
                 return Action::Continue;
             }
 
             // Group settings modal: handle [L] for leave, [R] for key rotation
-            if let Some(ModalKind::GroupSettings) = &app.modal {
+            if matches!(&app.modal, Some(ModalState::GroupSettings)) {
                 match key.code {
                     KeyCode::Char('l') | KeyCode::Char('L') => {
                         app.pending_leave_chat = true;
@@ -342,17 +343,18 @@ fn execute_command(app: &mut AppState, action: CommandAction) -> Action {
     match action {
         CommandAction::Quit => Action::Quit,
         CommandAction::MemberList => {
-            app.modal = Some(ModalKind::MemberList);
+            app.modal = Some(ModalState::MemberList);
             Action::Continue
         }
         CommandAction::GroupSettings => {
-            app.modal = Some(ModalKind::GroupSettings);
+            app.modal = Some(ModalState::GroupSettings);
             Action::Continue
         }
         CommandAction::InviteCreate => {
             use crate::tui::app::InviteModalState;
-            app.invite_modal = Some(InviteModalState::new());
-            app.modal = Some(ModalKind::InviteCreate);
+            let mut s = InviteModalState::new();
+            s.creating_spawned = false;
+            app.modal = Some(ModalState::InviteCreate(s));
             // Fetch existing invites for this chat
             app.pending_list_invites = true;
             Action::Continue
@@ -362,8 +364,7 @@ fn execute_command(app: &mut AppState, action: CommandAction) -> Action {
             Action::Continue
         }
         CommandAction::Search => {
-            app.search_modal = Some(SearchModalState::new());
-            app.modal = Some(ModalKind::Search);
+            app.modal = Some(ModalState::Search(SearchModalState::new()));
             Action::Continue
         }
         CommandAction::Contacts => {
@@ -378,8 +379,7 @@ fn execute_command(app: &mut AppState, action: CommandAction) -> Action {
                 .iter()
                 .map(|c| (c.uuid.clone(), c.topic.clone()))
                 .collect();
-            app.contacts_modal = Some(modal);
-            app.modal = Some(ModalKind::Contacts);
+            app.modal = Some(ModalState::Contacts(modal));
             Action::Continue
         }
         CommandAction::JoinByCode(code) => {

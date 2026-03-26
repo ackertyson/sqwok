@@ -376,12 +376,11 @@ fn print_help() {
         format!("{BOLD}sqwok{R} v{VERSION} — terminal chat app with E2E encryption"),
         String::new(),
         format!("{GREEN}Usage:{R}"),
-        format!("  {BOLD}sqwok{R}                                  Run chat client"),
-        format!("  {BOLD}sqwok new{R} {BOLD}<TOPIC>{R}                     Create a new chat"),
+        format!("  {BOLD}sqwok{R}                                    Run chat client"),
         format!(
-            "  {BOLD}sqwok new{R} {BOLD}<TOPIC>{R} {DIM}--description <DESC>{R}   Create a new chat with description"
+            "  {BOLD}sqwok new{R} {BOLD}<TOPIC>{R} {DIM}[--description <DESC>]{R} Create a new chat with optional description"
         ),
-        format!("  {BOLD}sqwok join{R} {BOLD}<CODE>{R}                    Join via invite code"),
+        format!("  {BOLD}sqwok join{R} {BOLD}<CODE>{R}                        Join via invite code"),
         String::new(),
         format!("{GREEN}Options:{R}"),
         format!("  {BOLD}--server{R} {DIM}<URL>{R}      Server URL {DIM}(overrides $SQWOK_SERVER){R}"),

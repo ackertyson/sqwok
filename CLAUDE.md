@@ -19,7 +19,7 @@ cargo test <test_name>         # Run a single test
 docker-compose up              # Run via Docker
 ```
 
-CLI usage: `sqwok` (interactive), `sqwok new "Topic"` (create chat), `sqwok join CODE-1234` (join via invite).
+CLI usage: `sqwok` (interactive), `sqwok new "Topic" [--description "Desc"]` (create chat), `sqwok join CODE-1234` (join via invite). Global flags: `--server <URL>`, `--identity <DIR>`.
 
 ## Core principles
 
@@ -50,15 +50,15 @@ Each event mutates `AppState` (`tui/app.rs`, the central state object) and optio
 - **`identity/`** — Registration flow (email verification → RSA keypair → server-signed X.509 cert).
 - **`net/`** — WebSocket client with exponential backoff reconnection (1s→60s max), 30s heartbeat. Also HTTP endpoints for invites and user search.
 - **`storage/`** — SQLite persistence. Per-chat message DB at `~/.sqwok/chats/{uuid}/messages.db`. Global contact cache at `~/.sqwok/contacts.db`.
-- **`tui/`** — Ratatui-based terminal UI. `app.rs` (~1500 lines) holds all state. `input.rs` handles keyboard dispatch per mode/context. `views/` has individual view components.
+- **`tui/`** — Ratatui-based terminal UI. `app.rs` (~1800 lines) holds all state. `input.rs` handles keyboard dispatch per mode/context. `views/` has individual view components (chat, chat_picker, command_bar, contacts, error_toast, group_settings, invite, member_list, modal, search).
 
 ### State Modes
 
-AppState operates in two modes: `ChatPicker` (chat list) and `Chat` (active conversation). Modals (member list, settings, invite, search, contacts) overlay on top.
+AppState operates in two modes: `ChatPicker` (chat list) and `Chat` (active conversation). Modals (member list, group settings, invite, search, contacts) overlay on top. The `Chat` mode supports multiple simultaneous panes (vertical or horizontal split) via `Vec<Pane>` with an `active_pane` index.
 
 ### Phoenix Channel Protocol
 
-Server communication uses Phoenix channel frames: `{"topic", "event", "ref", "join_ref", "payload"}`. Key events: `msg:new`, `msg:updated`, `member:joined`, `key:request`, `key:distribute`.
+Server communication uses Phoenix channel frames: `{"topic", "event", "ref", "join_ref", "payload"}`. Key inbound events: `msg:new`, `msg:buffered`, `presence_state`, `presence_diff`, `member:removed`, `key:request`, `key:distribute`, `typing:active`, `sync:push`, `sync:assign`, `chat:added`, `chat:removed`.
 
 ## Environment Variables
 

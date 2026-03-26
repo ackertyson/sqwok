@@ -3,6 +3,8 @@ pub mod event;
 pub mod input;
 pub mod pane;
 pub mod render;
+pub mod render_rows;
+pub mod store;
 pub mod style;
 pub mod views;
 
@@ -14,7 +16,7 @@ use ratatui::prelude::*;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use self::app::{AppState, InviteStep};
+use self::app::{AppState, InviteStep, ModalState};
 use self::event::{AppEvent, EventCollector};
 use self::input::Action;
 
@@ -138,7 +140,7 @@ pub async fn run(
                 maybe_spawn_redeem(app, &event_tx, &http);
             }
             Some(AppEvent::InviteCreated(info)) => {
-                if let Some(ref mut inv_modal) = app.invite_modal {
+                if let Some(ModalState::InviteCreate(ref mut inv_modal)) = app.modal {
                     inv_modal.created_code = Some(info.display_code.clone());
                     inv_modal.step = InviteStep::Display;
                 }
@@ -148,7 +150,7 @@ pub async fn run(
                 ));
             }
             Some(AppEvent::InviteError(msg)) => {
-                if let Some(ref mut inv_modal) = app.invite_modal {
+                if let Some(ModalState::InviteCreate(ref mut inv_modal)) = app.modal {
                     inv_modal.error = Some(msg.clone());
                     inv_modal.step = InviteStep::Configure;
                     inv_modal.creating_spawned = false;
@@ -159,7 +161,7 @@ pub async fn run(
                 ));
             }
             Some(AppEvent::SearchResults { query, results }) => {
-                if let Some(ref mut search) = app.search_modal {
+                if let Some(ModalState::Search(ref mut search)) = app.modal {
                     if search.query == query {
                         // Merge with existing results, deduplicating by UUID
                         let existing_uuids: std::collections::HashSet<Uuid> =
@@ -238,12 +240,12 @@ pub async fn run(
                 ));
             }
             Some(AppEvent::InviteList(invites)) => {
-                if let Some(ref mut inv_modal) = app.invite_modal {
+                if let Some(ModalState::InviteCreate(ref mut inv_modal)) = app.modal {
                     inv_modal.active_invites = invites;
                 }
             }
             Some(AppEvent::InviteRevoked(code)) => {
-                if let Some(ref mut inv_modal) = app.invite_modal {
+                if let Some(ModalState::InviteCreate(ref mut inv_modal)) = app.modal {
                     inv_modal.active_invites.retain(|i| i.code != code);
                 }
                 app.toast = Some((
@@ -268,23 +270,21 @@ fn maybe_spawn_invite_create(
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     http: &reqwest::Client,
 ) {
-    let needs_spawn = app
-        .invite_modal
-        .as_ref()
-        .map(|m| m.step == InviteStep::Creating && !m.creating_spawned)
-        .unwrap_or(false);
-
-    if !needs_spawn {
-        return;
-    }
-
-    if let Some(ref mut modal) = app.invite_modal {
+    let (ttl, use_limit) = if let Some(ModalState::InviteCreate(ref mut modal)) = app.modal {
+        if modal.step != InviteStep::Creating || modal.creating_spawned {
+            return;
+        }
         modal.creating_spawned = true;
-        let chat_uuid_str = app.current_chat.clone().unwrap_or_default();
         let ttl = views::invite::TTL_OPTIONS[modal.ttl_selection]
             .0
             .to_string();
-        let use_limit = modal.use_limit;
+        (ttl, modal.use_limit)
+    } else {
+        return;
+    };
+
+    {
+        let chat_uuid_str = app.current_chat.clone().unwrap_or_default();
         let server_url = app.server_url.clone();
         let identity_dir = app.identity_dir.clone();
         let http = http.clone();
@@ -426,50 +426,52 @@ fn maybe_spawn_search(
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     http: &reqwest::Client,
 ) {
-    let needs_search = app
-        .search_modal
-        .as_ref()
-        .map(|s| !s.query.is_empty() && s.query != s.last_searched)
-        .unwrap_or(false);
-
-    if !needs_search {
-        return;
-    }
-
-    if let Some(ref mut search) = app.search_modal {
-        let query = search.query.clone();
-        search.last_searched = query.clone();
-
-        // Local search synchronously
-        if let Some(ref cs) = app.contact_store {
-            if let Ok(local) = cs.search(&query, 10) {
-                search.results = local
-                    .into_iter()
-                    .map(|c| crate::net::search::SearchResult {
-                        uuid: c.uuid,
-                        screenname: c.screenname,
-                    })
-                    .collect();
-            }
+    // Extract query — releases borrow so we can access other fields below.
+    let query = match &app.modal {
+        Some(ModalState::Search(s)) if !s.query.is_empty() && s.query != s.last_searched => {
+            s.query.clone()
         }
+        _ => return,
+    };
 
-        let server_url = app.server_url.clone();
-        let identity_dir = app.identity_dir.clone();
-        let http = http.clone();
-        let tx = event_tx.clone();
-
-        tokio::spawn(async move {
-            let token = match crate::auth::token::build_token(&identity_dir, &server_url) {
-                Ok(t) => t,
-                Err(_) => return,
-            };
-            if let Ok(results) =
-                crate::net::search::search_users(&http, &server_url, &token, &query).await
-            {
-                let _ = tx.send(AppEvent::SearchResults { query, results });
-            }
-        });
+    // Mark as searched and do a synchronous local search.
+    if let Some(ModalState::Search(ref mut search)) = app.modal {
+        search.last_searched = query.clone();
     }
+    let local_results = app
+        .contact_store
+        .as_ref()
+        .and_then(|cs| cs.search(&query, 10).ok())
+        .map(|hits| {
+            hits.into_iter()
+                .map(|c| crate::net::search::SearchResult {
+                    uuid: c.uuid,
+                    screenname: c.screenname,
+                })
+                .collect::<Vec<_>>()
+        });
+    if let Some(ModalState::Search(ref mut search)) = app.modal {
+        if let Some(results) = local_results {
+            search.results = results;
+        }
+    }
+
+    let server_url = app.server_url.clone();
+    let identity_dir = app.identity_dir.clone();
+    let http = http.clone();
+    let tx = event_tx.clone();
+
+    tokio::spawn(async move {
+        let token = match crate::auth::token::build_token(&identity_dir, &server_url) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        if let Ok(results) =
+            crate::net::search::search_users(&http, &server_url, &token, &query).await
+        {
+            let _ = tx.send(AppEvent::SearchResults { query, results });
+        }
+    });
 }
 
 // Spawn the add-member HTTP task when pending_add_member is set.
@@ -570,11 +572,13 @@ fn maybe_spawn_revoke_invite(
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     http: &reqwest::Client,
 ) {
-    let code = match app
-        .invite_modal
-        .as_mut()
-        .and_then(|m| m.pending_revoke.take())
-    {
+    let code = match app.modal.as_mut().and_then(|m| {
+        if let ModalState::InviteCreate(ref mut inv) = m {
+            inv.pending_revoke.take()
+        } else {
+            None
+        }
+    }) {
         Some(c) => c,
         None => return,
     };
