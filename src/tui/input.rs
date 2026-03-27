@@ -178,6 +178,14 @@ fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
                 app.active_pane_mut().pop_char();
                 Action::Continue
             }
+            KeyCode::Left => {
+                app.active_pane_mut().move_cursor_left();
+                Action::Continue
+            }
+            KeyCode::Right => {
+                app.active_pane_mut().move_cursor_right();
+                Action::Continue
+            }
             _ => Action::Continue,
         },
         _ => Action::Continue,

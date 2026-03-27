@@ -75,6 +75,13 @@ async fn main() -> Result<()> {
     debug_log::init();
     dlog!("sqwok starting — server={}", server_url);
 
+    // Restore terminal before printing panic so the message is readable.
+    std::panic::set_hook(Box::new(|info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stderr(), crossterm::terminal::LeaveAlternateScreen);
+        eprintln!("{info}");
+    }));
+
     // Registration if needed
     if !identity::credentials::is_registered(&identity_dir) {
         identity::registration::run_registration(&server_url, &identity_dir).await?;

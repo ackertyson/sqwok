@@ -53,6 +53,8 @@ pub enum RenderRow {
         indent: u8,
         is_active: bool,
         content: String,
+        /// Cursor position as a char index within `content`.
+        cursor: usize,
     },
     TypingIndicator {
         indent: u8,
@@ -274,16 +276,20 @@ pub fn build(
                         let reply_target =
                             InputTarget::Reply(reply_uuid.to_string(), top_uuid.clone());
                         if pane.editing.as_ref() == Some(&reply_target) {
+                            let content =
+                                pane.inputs.get(&reply_target).cloned().unwrap_or_default();
+                            let cursor = pane
+                                .cursor_positions
+                                .get(&reply_target)
+                                .copied()
+                                .unwrap_or(content.chars().count());
                             rows.push(RenderRow::Input {
                                 thread_uuid: Some(top_uuid.clone()),
                                 reply_to_uuid: Some(reply_uuid.to_string()),
                                 indent: 2,
                                 is_active: true,
-                                content: pane
-                                    .inputs
-                                    .get(&reply_target)
-                                    .cloned()
-                                    .unwrap_or_default(),
+                                content,
+                                cursor,
                             });
                         }
                     }
@@ -297,16 +303,23 @@ pub fn build(
                 // Thread input prompt at depth-1
                 let thread_input_target = InputTarget::Thread(top_uuid.clone());
                 let is_editing = pane.editing.as_ref() == Some(&thread_input_target);
+                let content = pane
+                    .inputs
+                    .get(&thread_input_target)
+                    .cloned()
+                    .unwrap_or_default();
+                let cursor = pane
+                    .cursor_positions
+                    .get(&thread_input_target)
+                    .copied()
+                    .unwrap_or(content.chars().count());
                 rows.push(RenderRow::Input {
                     thread_uuid: Some(top_uuid.clone()),
                     reply_to_uuid: None,
                     indent: 1,
                     is_active: is_editing,
-                    content: pane
-                        .inputs
-                        .get(&thread_input_target)
-                        .cloned()
-                        .unwrap_or_default(),
+                    content,
+                    cursor,
                 });
             }
         }
@@ -319,16 +332,23 @@ pub fn build(
 
     // Main chat input at bottom
     let is_editing_main = pane.editing.as_ref() == Some(&InputTarget::MainChat);
+    let main_content = pane
+        .inputs
+        .get(&InputTarget::MainChat)
+        .cloned()
+        .unwrap_or_default();
+    let main_cursor = pane
+        .cursor_positions
+        .get(&InputTarget::MainChat)
+        .copied()
+        .unwrap_or(main_content.chars().count());
     rows.push(RenderRow::Input {
         thread_uuid: None,
         reply_to_uuid: None,
         indent: 0,
         is_active: is_editing_main,
-        content: pane
-            .inputs
-            .get(&InputTarget::MainChat)
-            .cloned()
-            .unwrap_or_default(),
+        content: main_content,
+        cursor: main_cursor,
     });
 
     rows

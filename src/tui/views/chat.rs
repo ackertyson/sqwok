@@ -84,6 +84,7 @@ pub fn draw_bottom_bar(frame: &mut Frame, area: Rect) {
         ("/", "cmd"),
         ("Alt+\\", "vpane"),
         ("Alt+-", "hpane"),
+        ("Alt+w", "close pane"),
         ("Ctrl+c", "quit"),
     ]);
     status_spans.extend(hint.spans);
@@ -237,6 +238,7 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
         indent,
         is_active,
         content,
+        cursor,
         ..
     } = row
     {
@@ -245,8 +247,8 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
         }
         let prefix_len = indent_width(*indent) + 2; // "> "
         let avail = (width as usize).saturating_sub(prefix_len).max(1);
-        // Include cursor char in wrap calculation
-        let cursor_content = format!("{}_", content);
+        // Include cursor char in wrap calculation at the correct position
+        let cursor_content = insert_cursor_marker(content, *cursor);
         return wrap_words(&cursor_content, avail, avail)
             .len()
             .max(1)
@@ -295,6 +297,24 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
 #[inline]
 fn area_height_cap() -> usize {
     20
+}
+
+/// Insert a `\x01` marker at char position `cursor` in `s`.
+/// The marker is used during wrapping so the cursor position influences line breaks,
+/// then located in the wrapped output to render the block cursor.
+fn insert_cursor_marker(s: &str, cursor: usize) -> String {
+    let char_count = s.chars().count();
+    let cursor = cursor.min(char_count);
+    let byte_idx = s
+        .char_indices()
+        .nth(cursor)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let mut out = String::with_capacity(s.len() + 1);
+    out.push_str(&s[..byte_idx]);
+    out.push('\x01');
+    out.push_str(&s[byte_idx..]);
+    out
 }
 
 /// Word-wrap `text` into lines. The first line has at most `first_width` chars,
@@ -486,7 +506,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                     avail_width,
                     prefix_len,
                     ts_len,
-                    &full_body[..full_body.len().min(40)]
+                    &full_body.chars().take(40).collect::<String>()
                 );
             }
             for (i, line_text) in wrapped.into_iter().enumerate() {
@@ -590,6 +610,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             indent,
             is_active,
             content,
+            cursor,
         } => {
             let indent_str = build_indent(*indent);
             let prompt_color = if *is_active { s::accent() } else { s::dim() };
@@ -612,36 +633,40 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 let avail = (avail_width as usize).saturating_sub(prefix_len).max(1);
                 let padding = " ".repeat(prefix_len);
 
-                // Wrap content+cursor together so the cursor drives line breaks
-                let cursor_content = format!("{}_", content);
+                // Insert \x01 marker at cursor position so wrapping accounts for it,
+                // then locate the marker in wrapped output to split before/after.
+                let cursor_content = insert_cursor_marker(content, *cursor);
                 let wrapped = wrap_words(&cursor_content, avail, avail);
-                let n = wrapped.len();
                 let mut lines: Vec<Line> = Vec::new();
                 for (i, line_text) in wrapped.into_iter().enumerate() {
                     let is_first = i == 0;
-                    let is_last = i + 1 == n;
-                    // On the last line, strip the trailing "_" and re-add it as a styled span
-                    let (body_text, cursor_span): (String, Option<Span>) = if is_last {
-                        let mut chars = line_text.chars();
-                        chars.next_back(); // remove "_"
-                        (
-                            chars.collect(),
-                            Some(Span::styled("_", Style::default().fg(s::accent()))),
-                        )
-                    } else {
-                        (line_text, None)
-                    };
+                    // Split on the \x01 marker if present in this line.
+                    // The first char of `remaining` is the cursor char (or space at EOL).
                     let mut spans: Vec<Span> = if is_first {
                         vec![
                             Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
                             Span::styled("> ", Style::default().fg(prompt_color)),
-                            Span::raw(body_text),
                         ]
                     } else {
-                        vec![Span::raw(padding.clone()), Span::raw(body_text)]
+                        vec![Span::raw(padding.clone())]
                     };
-                    if let Some(cur) = cursor_span {
-                        spans.push(cur);
+                    if let Some(marker_pos) = line_text.find('\x01') {
+                        let before = &line_text[..marker_pos];
+                        let remaining = &line_text[marker_pos + 1..];
+                        let (cursor_ch, after) = match remaining.chars().next() {
+                            Some(ch) => (ch.to_string(), remaining[ch.len_utf8()..].to_string()),
+                            None => (" ".to_string(), String::new()),
+                        };
+                        spans.push(Span::raw(before.to_string()));
+                        spans.push(Span::styled(
+                            cursor_ch,
+                            Style::default().fg(s::BG).bg(s::accent()),
+                        ));
+                        if !after.is_empty() {
+                            spans.push(Span::raw(after));
+                        }
+                    } else {
+                        spans.push(Span::raw(line_text));
                     }
                     lines.push(Line::from(spans));
                 }
