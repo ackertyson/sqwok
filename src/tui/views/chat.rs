@@ -27,45 +27,49 @@ pub fn draw_top_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     } else {
         "[no keys]"
     };
-    let mut topic_spans = vec![Span::styled(
+
+    // Build the right-side status string first so we can reserve space for it.
+    let total = app.members.len();
+    let online = app.members.iter().filter(|m| m.online).count();
+    let members_text = if online < total {
+        format!("{} members ({} online)", total, online)
+    } else {
+        format!("{} members", total)
+    };
+    let right_text = format!("{}  {}", members_text, keys_indicator);
+    let right_width = (right_text.len() as u16).min(area.width);
+    let left_width = area.width.saturating_sub(right_width);
+
+    // Left area: topic + optional description (clipped by ratatui if too long).
+    let mut left_spans = vec![Span::styled(
         topic,
         Style::default()
             .fg(s::accent())
             .add_modifier(Modifier::BOLD),
     )];
     if let Some(desc) = description {
-        topic_spans.push(Span::raw("  "));
-        topic_spans.push(Span::styled(desc, Style::default().fg(s::dim())));
+        left_spans.push(Span::raw("  "));
+        left_spans.push(Span::styled(desc, Style::default().fg(s::dim())));
     }
-    topic_spans.push(Span::raw("  "));
-    let topic_line = Line::from({
-        let mut spans = topic_spans;
-        spans.extend(vec![
-            Span::styled(
-                {
-                    let total = app.members.len();
-                    let online = app.members.iter().filter(|m| m.online).count();
-                    if online < total {
-                        format!("{} members ({} online)", total, online)
-                    } else {
-                        format!("{} members", total)
-                    }
-                },
-                Style::default().fg(s::dim()),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                keys_indicator,
-                Style::default().fg(if app.has_keys {
-                    s::success_color()
-                } else {
-                    s::error_color()
-                }),
-            ),
-        ]);
-        spans
-    });
-    frame.render_widget(Paragraph::new(topic_line), area);
+    let left_area = ratatui::layout::Rect::new(area.x, area.y, left_width, area.height);
+    frame.render_widget(Paragraph::new(Line::from(left_spans)), left_area);
+
+    // Right area: member count + keys indicator — always visible.
+    let right_spans = vec![
+        Span::styled(members_text, Style::default().fg(s::dim())),
+        Span::raw("  "),
+        Span::styled(
+            keys_indicator,
+            Style::default().fg(if app.has_keys {
+                s::success_color()
+            } else {
+                s::error_color()
+            }),
+        ),
+    ];
+    let right_area =
+        ratatui::layout::Rect::new(area.x + left_width, area.y, right_width, area.height);
+    frame.render_widget(Paragraph::new(Line::from(right_spans)), right_area);
 }
 
 pub fn draw_bottom_bar(frame: &mut Frame, area: Rect) {
