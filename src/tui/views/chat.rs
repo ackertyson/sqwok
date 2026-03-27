@@ -260,7 +260,7 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
         author,
         body,
         timestamp,
-        reply_to_uuid,
+        reply_to_uuid: _,
         is_pending,
         collapsed_sub_count,
         ..
@@ -273,9 +273,8 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
     }
     let w = width as usize;
     let indent_len = indent_width(*indent);
-    let reply_len = if reply_to_uuid.is_some() { 2usize } else { 0 };
-    // prefix: indent + reply + author + "  "
-    let prefix_len = indent_len + reply_len + author.chars().count() + 2;
+    // prefix: indent + author + "  "
+    let prefix_len = indent_len + author.chars().count() + 2;
     // suffix on last line: optional "[N replies]  " + "  " + timestamp
     let replies_tag_len = collapsed_sub_count
         .map(|n| format!("  [{} replies]", n).chars().count())
@@ -427,7 +426,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             indent,
             is_pending,
             highlight_age,
-            reply_to_uuid,
+            reply_to_uuid: _,
             collapsed_sub_count,
             sub_typing_active,
             is_unread,
@@ -444,7 +443,6 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             };
 
             let indent_str = build_indent(*indent);
-            let reply_prefix = if reply_to_uuid.is_some() { "↩ " } else { "" };
             let name_style = Style::default()
                 .fg(*author_color)
                 .add_modifier(Modifier::BOLD);
@@ -455,9 +453,8 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             // Compute layout widths
             let w = avail_width as usize;
             let indent_chars = indent_str.chars().count();
-            let reply_chars = reply_prefix.chars().count();
             let author_chars = author.chars().count();
-            let prefix_len = indent_chars + reply_chars + author_chars + 2; // +2 for "  "
+            let prefix_len = indent_chars + author_chars + 2; // +2 for "  "
             let replies_tag = collapsed_sub_count.map(|n| format!("[{} replies]", n));
             let replies_tag_len = replies_tag
                 .as_ref()
@@ -516,7 +513,6 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 let line = if is_first && is_last {
                     let mut spans = vec![
                         Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
-                        Span::styled(reply_prefix.to_string(), Style::default().fg(s::dim())),
                         Span::styled(author.clone(), name_style),
                         Span::styled("  ", body_style),
                         Span::styled(line_text, body_style),
@@ -526,7 +522,6 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 } else if is_first {
                     Line::from(vec![
                         Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
-                        Span::styled(reply_prefix.to_string(), Style::default().fg(s::dim())),
                         Span::styled(author.clone(), name_style),
                         Span::styled("  ", body_style),
                         Span::styled(line_text, body_style),
@@ -679,15 +674,15 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
 fn indent_width(indent: u8) -> usize {
     match indent {
         0 => 0,
-        1 => 5, // "  +- "
-        _ => 8, // "  |  +- "
+        1 => 5, // "  └─ "
+        _ => 8, // "  │  └─ "
     }
 }
 
 fn build_indent(indent: u8) -> String {
     match indent {
         0 => String::new(),
-        1 => "  +- ".to_string(),
-        _ => "  |  +- ".to_string(),
+        1 => "  └─ ".to_string(),
+        _ => "  │  └─ ".to_string(),
     }
 }
