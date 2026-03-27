@@ -40,7 +40,7 @@ pub async fn create_invite(
 ) -> anyhow::Result<InviteInfo> {
     let resp = http
         .post(format!("{}/api/invites", server_url))
-        .header("Authorization", auth_token)
+        .header("Authorization", format!("Bearer {}", auth_token))
         .json(&CreateInviteRequest {
             chat_uuid,
             ttl: ttl.to_string(),
@@ -62,7 +62,7 @@ pub async fn redeem_invite(
 ) -> anyhow::Result<(Uuid, String)> {
     let resp = http
         .post(format!("{}/api/invites/redeem", server_url))
-        .header("Authorization", auth_token)
+        .header("Authorization", format!("Bearer {}", auth_token))
         .json(&serde_json::json!({"code": code}))
         .send()
         .await?
@@ -79,7 +79,7 @@ pub async fn revoke_invite(
     code: &str,
 ) -> anyhow::Result<()> {
     http.delete(format!("{}/api/invites/{}", server_url, code))
-        .header("Authorization", auth_token)
+        .header("Authorization", format!("Bearer {}", auth_token))
         .send()
         .await?
         .error_for_status()?;
@@ -95,7 +95,7 @@ pub async fn list_invites(
     let resp = http
         .get(format!("{}/api/invites", server_url))
         .query(&[("chat_uuid", chat_uuid.to_string())])
-        .header("Authorization", auth_token)
+        .header("Authorization", format!("Bearer {}", auth_token))
         .send()
         .await?
         .error_for_status()?

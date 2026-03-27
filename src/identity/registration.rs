@@ -223,7 +223,7 @@ async fn complete_registration(
     let token = crate::auth::token::build_token(identity_dir, server_url)?;
     let upload_resp = client
         .post(format!("{}/api/e2e_key", server_url))
-        .header("Authorization", &token)
+        .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({
             "public_key": base64::engine::general_purpose::STANDARD.encode(&e2e_public)
         }))

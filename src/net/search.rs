@@ -23,7 +23,7 @@ pub async fn search_users(
     let resp = http
         .get(format!("{}/api/users/search", server_url))
         .query(&[("q", query)])
-        .header("Authorization", auth_token)
+        .header("Authorization", format!("Bearer {}", auth_token))
         .send()
         .await?
         .error_for_status()?

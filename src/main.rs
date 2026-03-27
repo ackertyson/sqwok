@@ -253,7 +253,7 @@ async fn fetch_chat_list(
     let token = auth::token::build_token(identity_dir, server_url)?;
     let resp: serde_json::Value = http
         .get(format!("{}/api/chats", server_url))
-        .header("Authorization", &token)
+        .header("Authorization", format!("Bearer {}", token))
         .send()
         .await?
         .json()
@@ -294,7 +294,7 @@ async fn create_chat(
     }
     let resp: serde_json::Value = http
         .post(format!("{}/api/chats", server_url))
-        .header("Authorization", token)
+        .header("Authorization", format!("Bearer {}", token))
         .json(&body)
         .send()
         .await?

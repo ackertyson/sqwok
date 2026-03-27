@@ -401,7 +401,7 @@ fn maybe_spawn_leave_chat(
         let url = format!("{}/api/chats/{}/members/{}", server_url, chat_uuid, my_uuid);
         match http
             .delete(&url)
-            .header("Authorization", &token)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .await
         {
@@ -502,7 +502,7 @@ fn maybe_spawn_add_member(
         let url = format!("{}/api/chats/{}/members", server_url, chat_uuid);
         match http
             .post(&url)
-            .header("Authorization", &token)
+            .header("Authorization", format!("Bearer {}", token))
             .json(&serde_json::json!({"user_uuid": user_uuid}))
             .send()
             .await
@@ -618,7 +618,7 @@ async fn fetch_e2e_key(
     let url = format!("{}/api/users/{}/e2e_key", server_url, user_uuid);
     let resp: serde_json::Value = http
         .get(&url)
-        .header("Authorization", token)
+        .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
         .ok()?

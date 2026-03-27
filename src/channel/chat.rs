@@ -367,7 +367,7 @@ impl ChatChannel {
         let resp: serde_json::Value = tokio::task::block_in_place(|| {
             reqwest::blocking::Client::new()
                 .get(&url)
-                .header("Authorization", &token)
+                .header("Authorization", format!("Bearer {}", token))
                 .send()
                 .map_err(|e| anyhow::anyhow!("HTTP fetch failed: {}", e))?
                 .json()
