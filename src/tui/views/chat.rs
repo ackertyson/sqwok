@@ -543,11 +543,29 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                         Span::styled(line_text, body_style),
                     ])
                 };
+                // For selected rows: explicitly set bg on every text span so they keep
+                // actual_bg; the paragraph's bg (trail_bg) then fills the empty trailing
+                // space at the right — creating a bold color flash past the text.
+                let line = if is_selected {
+                    let spans = line
+                        .spans
+                        .into_iter()
+                        .map(|s| Span::styled(s.content, s.style.bg(actual_bg)))
+                        .collect::<Vec<_>>();
+                    Line::from(spans)
+                } else {
+                    line
+                };
                 lines.push(line.style(Style::default().bg(actual_bg)));
             }
 
+            let para_bg = if is_selected {
+                s::selection_trail_bg()
+            } else {
+                actual_bg
+            };
             frame.render_widget(
-                Paragraph::new(lines).style(Style::default().bg(actual_bg)),
+                Paragraph::new(lines).style(Style::default().bg(para_bg)),
                 area,
             );
         }
@@ -569,6 +587,24 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 s::BG
             };
             let author_color = *author_color;
+            let replies_tag = format!("[{} replies]", reply_count);
+            // Compute how many chars are reserved for non-preview content so we
+            // only truncate the preview when it would actually crowd out the
+            // replies count or timestamp.
+            let reserved = author.chars().count()
+                + 2  // "  " after author
+                + 2  // "  " before replies tag
+                + replies_tag.chars().count()
+                + 2  // "  " before timestamp
+                + timestamp.chars().count()
+                + if *typing_active { 4 } else { 0 }; // " ..."
+            let preview_avail = (avail_width as usize).saturating_sub(reserved);
+            let preview_chars = preview.chars().count();
+            let truncated_preview: String = if preview_chars <= preview_avail {
+                preview.clone()
+            } else {
+                preview.chars().take(preview_avail.saturating_sub(1)).collect::<String>() + "…"
+            };
             let mut spans = vec![
                 Span::styled(
                     author.clone(),
@@ -577,12 +613,9 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::raw(preview.clone()),
+                Span::raw(truncated_preview),
                 Span::raw("  "),
-                Span::styled(
-                    format!("[{} replies]", reply_count),
-                    Style::default().fg(s::accent()),
-                ),
+                Span::styled(replies_tag, Style::default().fg(s::accent())),
             ];
             if *typing_active {
                 spans.push(Span::styled(
@@ -597,9 +630,23 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 timestamp.clone(),
                 Style::default().fg(s::dim()),
             ));
-            let line = Line::from(spans);
+            let line = if is_selected {
+                let spans = spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content, s.style.bg(actual_bg)))
+                    .collect::<Vec<_>>();
+                Line::from(spans)
+            } else {
+                Line::from(spans)
+            };
+            let para_bg = if is_selected {
+                s::selection_trail_bg()
+            } else {
+                actual_bg
+            };
             frame.render_widget(
-                Paragraph::new(line).style(Style::default().bg(actual_bg)),
+                Paragraph::new(line)
+                    .style(Style::default().bg(para_bg)),
                 area,
             );
         }

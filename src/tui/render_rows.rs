@@ -110,7 +110,7 @@ pub fn build(
 
         if reply_count > 0 && !is_expanded {
             // Collapsed thread
-            let preview: String = msg.body.chars().take(40).collect();
+            let preview: String = msg.body.clone();
             let typing_active = typing_indicators
                 .iter()
                 .any(|(t, _)| t.as_deref() == Some(top_uuid.as_str()));

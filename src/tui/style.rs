@@ -14,6 +14,7 @@ fn is_truecolor() -> bool {
     *TRUECOLOR.get_or_init(supports_truecolor)
 }
 
+
 /// Select RGB if truecolor is supported, otherwise use 256-color indexed fallback.
 fn color(rgb: (u8, u8, u8), indexed: u8) -> Color {
     if is_truecolor() {
@@ -105,6 +106,18 @@ pub fn shortcut_key_color() -> Color {
     color((180, 220, 140), 149)
 }
 
+#[inline]
+pub fn pill_color() -> Color {
+    color((180, 120, 255), 135)
+}
+#[inline]
+pub fn pill_fg() -> Color {
+    color((240, 240, 252), 255)
+}
+#[inline]
+pub fn selection_trail_bg() -> Color {
+    color((90, 60, 160), 97)
+}
 #[inline]
 pub fn warning_color() -> Color {
     color((230, 180, 80), 214)

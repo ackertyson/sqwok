@@ -10,7 +10,7 @@ pub mod views;
 
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
 };
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
@@ -109,6 +109,20 @@ pub async fn run(
                     ));
                 } else {
                     app.handle_frame(&frame);
+                    if frame.event == "msg:new" {
+                        let unread = app
+                            .msg_store
+                            .by_uuid
+                            .values()
+                            .filter(|m| !m.read)
+                            .count();
+                        let title = if unread > 0 {
+                            format!("[{} new] sqwok", unread)
+                        } else {
+                            "sqwok".to_string()
+                        };
+                        let _ = execute!(std::io::stdout(), SetTitle(title));
+                    }
                 }
             }
             Some(AppEvent::Tick) => {
