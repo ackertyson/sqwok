@@ -39,7 +39,7 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
         .split(area);
 
     views::chat::draw_top_bar(frame, outer[0], app);
-    views::chat::draw_bottom_bar(frame, outer[2], app);
+    views::chat::draw_bottom_bar(frame, outer[2]);
 
     let pane_area = outer[1];
 

@@ -68,9 +68,12 @@ pub fn draw_top_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     frame.render_widget(Paragraph::new(topic_line), area);
 }
 
-pub fn draw_bottom_bar(frame: &mut Frame, area: Rect, app: &AppState) {
+pub fn draw_bottom_bar(frame: &mut Frame, area: Rect) {
     let mut status_spans = vec![
-        Span::styled(app.my_screenname.clone(), Style::default().fg(s::accent())),
+        Span::styled(
+            format!("sqwok v{}", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(s::dim()),
+        ),
         Span::raw("  "),
     ];
     let hint = s::hint_line(&[
