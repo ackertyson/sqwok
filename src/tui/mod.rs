@@ -67,6 +67,7 @@ pub async fn run(
         match events.next().await {
             Some(AppEvent::Input(evt)) => {
                 if matches!(input::handle(app, evt), Action::Quit) {
+                    app.save_scroll_position();
                     return Ok(());
                 }
                 // After handling input, check for pending async operations

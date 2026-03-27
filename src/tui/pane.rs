@@ -11,8 +11,6 @@ pub enum InputTarget {
 pub struct Pane {
     /// Index of selected render row
     pub selected: usize,
-    /// Scroll offset (first visible row index)
-    pub scroll_offset: usize,
     /// Currently editing an input (None = navigation mode)
     pub editing: Option<InputTarget>,
     /// Input field contents by target
@@ -27,7 +25,6 @@ impl Pane {
     pub fn new() -> Self {
         Pane {
             selected: 0,
-            scroll_offset: 0,
             editing: None,
             inputs: HashMap::new(),
             expanded: HashSet::new(),
@@ -39,7 +36,6 @@ impl Pane {
         self.expanded.clear();
         self.collapsed_subs.clear();
         self.selected = 0;
-        self.scroll_offset = 0;
         self.editing = None;
         self.inputs.clear();
     }

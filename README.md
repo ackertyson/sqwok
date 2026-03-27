@@ -24,9 +24,14 @@ brew upgrade sqwok
 
 ### Docker
 
+Clone this repo locally, then:
+
 ```shell
 docker compose build sqwok
 docker compose run --rm sqwok join MY_INVITE_CODE
+
+# once joined, you can later simply:
+docker compose run --rm sqwok
 ```
 
 ### From source

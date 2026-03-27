@@ -79,7 +79,6 @@ fn handle_chat(app: &mut AppState, event: CtEvent) -> Action {
                     let new_count = app.render_row_count();
                     let added = new_count.saturating_sub(prev_count);
                     app.panes[app.active_pane].selected += added;
-                    app.panes[app.active_pane].scroll_offset += added;
                 }
                 app.move_selection(-1);
                 Action::Continue
@@ -131,7 +130,7 @@ fn handle_chat(app: &mut AppState, event: CtEvent) -> Action {
                 Action::Continue
             }
 
-(KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
+            (KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
                 app.jump_to_latest();
                 Action::Continue
             }

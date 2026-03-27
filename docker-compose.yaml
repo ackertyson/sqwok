@@ -3,7 +3,7 @@ services:
         image: local/sqwok:latest
         build: .
         environment:
-            SQWOK_SERVER: http://host.docker.internal:4000 # https://api.sqwok.io
+            SQWOK_SERVER: https://sqwok.fixbase.io # http://host.docker.internal:4000
         volumes:
             - sqwok-data:/home/sqwok/.sqwok
             - sqwok-identity:/home/sqwok/.local/share/sqwok

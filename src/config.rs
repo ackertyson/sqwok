@@ -13,7 +13,7 @@ pub fn identity_dir() -> PathBuf {
 }
 
 pub fn server_url() -> String {
-    std::env::var("SQWOK_SERVER").unwrap_or_else(|_| "http://localhost:4000".to_string())
+    std::env::var("SQWOK_SERVER").unwrap_or_else(|_| "https://sqwok.fixbase.io".to_string())
 }
 
 /// Returns the home directory, or an error if it cannot be determined.

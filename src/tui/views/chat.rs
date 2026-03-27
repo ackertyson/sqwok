@@ -114,30 +114,27 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
     let content_width = area.width.saturating_sub(GUTTER_WIDTH);
     let content_x = area.x + GUTTER_WIDTH;
 
-    // Show "scroll up for older messages" hint when there's more history.
-    // Rendered in the first row; message rendering starts on the row below.
-    let hint_shown = app.msg_store.has_more_above && pane.scroll_offset == 0 && pane.selected == 0;
+    let visible_height = area.height as usize;
+    let mid = visible_height / 2;
+
+    // Clamp selected to valid row range.
+    let selected = pane.selected.min(total_rows.saturating_sub(1));
+    // Keep selected row centered in the viewport. When near the top,
+    // saturating_sub clamps to 0 and the cursor drifts above the midline —
+    // but only if there is no older history left to load (the Up handler loads
+    // scrollback when selected == 0 and has_more_above). At the bottom, the
+    // list may not fill the viewport; that empty space is intentional.
+    let scroll_offset = selected.saturating_sub(mid);
+
+    // Show "scroll up for older messages" hint when there's more history and
+    // the cursor is at the first row. Rendered in row 0; messages start below.
+    let hint_shown = app.msg_store.has_more_above && selected == 0;
     if hint_shown {
         let hint =
             Paragraph::new("↑ scroll for older messages").style(Style::default().fg(s::dim()));
         let hint_area = Rect::new(content_x, area.y, content_width, 1);
         frame.render_widget(hint, hint_area);
     }
-
-    let visible_height = area.height as usize;
-
-    // Ensure scroll_offset keeps selection visible (in row-count units)
-    let selected = pane.selected.min(total_rows.saturating_sub(1));
-    let scroll_offset = {
-        let offset = pane.scroll_offset;
-        if selected < offset {
-            selected
-        } else if selected >= offset + visible_height {
-            selected.saturating_sub(visible_height.saturating_sub(1))
-        } else {
-            offset
-        }
-    };
 
     // Render rows from scroll_offset, tracking current y position.
     // Each row may occupy multiple lines depending on message length.

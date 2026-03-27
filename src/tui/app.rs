@@ -605,6 +605,55 @@ impl AppState {
         }
     }
 
+    /// Save the UUID of the currently-selected message to disk so it can be
+    /// restored the next time this chat is opened.
+    pub fn save_scroll_position(&self) {
+        let chat_uuid = match &self.current_chat {
+            Some(u) => u.clone(),
+            None => return,
+        };
+        let cs = match &self.contact_store {
+            Some(cs) => cs,
+            None => return,
+        };
+        let rows = self.build_render_rows();
+        let sel = self.panes[self.active_pane]
+            .selected
+            .min(rows.len().saturating_sub(1));
+        if let Some(RenderRow::Message { uuid, .. }) = rows.get(sel) {
+            let _ = cs.save_scroll(&chat_uuid, uuid);
+        }
+    }
+
+    /// Restore scroll position after loading messages for a chat. Finds the
+    /// saved message UUID in the current render rows and sets `selected`; falls
+    /// back to `jump_to_latest` if the message isn't in the loaded window.
+    fn restore_scroll_position(&mut self) {
+        let chat_uuid = match &self.current_chat {
+            Some(u) => u.clone(),
+            None => return,
+        };
+        let saved_uuid = match &self.contact_store {
+            Some(cs) => cs.load_scroll(&chat_uuid).ok().flatten(),
+            None => None,
+        };
+        let saved_uuid = match saved_uuid {
+            Some(u) => u,
+            None => {
+                self.jump_to_latest();
+                return;
+            }
+        };
+        let rows = self.build_render_rows();
+        let idx = rows
+            .iter()
+            .position(|r| matches!(r, RenderRow::Message { uuid, .. } if uuid == &saved_uuid));
+        match idx {
+            Some(i) => self.panes[self.active_pane].selected = i,
+            None => self.jump_to_latest(),
+        }
+    }
+
     pub fn send_current_input(&mut self) {
         // Block sends while disconnected
         if !matches!(self.connection_status, ConnStatus::Connected) {
@@ -1007,6 +1056,7 @@ impl AppState {
         let join_frame = channel.join_frame();
         let _ = self.ws_tx.send(join_frame.encode());
 
+        self.save_scroll_position();
         self.current_chat = Some(chat_uuid.clone());
         self.chat_channel = Some(channel);
         self.clear_chat_state();
@@ -1017,8 +1067,9 @@ impl AppState {
         self.last_typing_notify = None;
         self.last_typing_target = None;
 
-        // Seed display from local SQLite history
+        // Seed display from local SQLite history and restore last scroll position
         self.seed_from_sqlite();
+        self.restore_scroll_position();
 
         // Request keys if we don't have them
         if !self.has_keys {

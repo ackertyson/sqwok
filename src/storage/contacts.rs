@@ -29,7 +29,11 @@ impl ContactStore {
                 updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             );
             CREATE INDEX IF NOT EXISTS idx_contacts_screenname
-            ON contacts(screenname COLLATE NOCASE);",
+            ON contacts(screenname COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS chat_scroll (
+                chat_uuid TEXT PRIMARY KEY,
+                msg_uuid  TEXT NOT NULL
+            );",
         )?;
         Ok(Self { conn })
     }
@@ -76,6 +80,25 @@ impl ContactStore {
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Persist the last-selected message UUID for a chat (scroll position).
+    pub fn save_scroll(&self, chat_uuid: &str, msg_uuid: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO chat_scroll (chat_uuid, msg_uuid) VALUES (?1, ?2)
+             ON CONFLICT(chat_uuid) DO UPDATE SET msg_uuid = excluded.msg_uuid",
+            params![chat_uuid, msg_uuid],
+        )?;
+        Ok(())
+    }
+
+    /// Load the last-selected message UUID for a chat, if any.
+    pub fn load_scroll(&self, chat_uuid: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT msg_uuid FROM chat_scroll WHERE chat_uuid = ?1")?;
+        let mut rows = stmt.query(params![chat_uuid])?;
+        Ok(rows.next()?.map(|r| r.get(0)).transpose()?)
     }
 
     /// Get all contacts, most recently seen first.
