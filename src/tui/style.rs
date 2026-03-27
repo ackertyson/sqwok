@@ -85,6 +85,39 @@ pub fn accent() -> Color {
 pub fn selection_bg() -> Color {
     color((30, 30, 50), 234)
 }
+
+/// How many gradient cells to paint at the leading edge of the selection bar.
+/// Truecolor gets 8 for a silky smooth ramp; 256-colour gets 4 since we're
+/// limited to hand-picked indexed stops anyway.
+pub fn selection_fade_steps() -> u16 {
+    if is_truecolor() { 8 } else { 4 }
+}
+
+/// Interpolated color for the fade zone at the leading edge of the trailing
+/// purple bar. Blends from `selection_bg` (text area) into `selection_trail_bg`
+/// (the vivid bar) so the bar eases in rather than appearing with a hard edge.
+/// `step` 0 is closest to the text; higher steps approach `selection_trail_bg`.
+pub fn selection_bg_fade(step: u16, total_steps: u16) -> Color {
+    let t = (step + 1) as f32 / (total_steps + 1) as f32;
+    if is_truecolor() {
+        let (r0, g0, b0) = (30u8, 30u8, 50u8);   // selection_bg
+        let (r1, g1, b1) = (90u8, 60u8, 160u8);  // selection_trail_bg
+        Color::Rgb(
+            (r0 as f32 + (r1 - r0) as f32 * t) as u8,
+            (g0 as f32 + (g1 - g0) as f32 * t) as u8,
+            (b0 as f32 + (b1 - b0) as f32 * t) as u8,
+        )
+    } else {
+        // Grayscale ramp (232-255) from near-black toward the light-gray trail.
+        // Evenly spaced indices: 234→236→238→241→244→247.
+        match step {
+            0 => Color::Indexed(236),
+            1 => Color::Indexed(238),
+            2 => Color::Indexed(241),
+            _ => Color::Indexed(244),
+        }
+    }
+}
 #[inline]
 pub fn highlight_bg() -> Color {
     color((40, 40, 65), 236)
@@ -116,7 +149,7 @@ pub fn pill_fg() -> Color {
 }
 #[inline]
 pub fn selection_trail_bg() -> Color {
-    color((90, 60, 160), 97)
+    color((90, 60, 160), 247)
 }
 #[inline]
 pub fn warning_color() -> Color {

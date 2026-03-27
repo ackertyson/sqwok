@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, Paragraph},
@@ -717,6 +717,40 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                     lines.push(Line::from(spans));
                 }
                 frame.render_widget(Paragraph::new(lines).style(Style::default().bg(bg)), area);
+            }
+        }
+    }
+    if is_selected {
+        apply_selection_fade(frame, area);
+    }
+}
+
+/// Softens the leading edge of the selection trail bar. After the paragraph
+/// is rendered, each row has text spans (bg = selection_bg) followed by empty
+/// cells (bg = selection_trail_bg). This function finds where the trail starts
+/// on each row and blends the first few cells from selection_bg into
+/// selection_trail_bg so the vivid purple eases in rather than cutting in hard.
+fn apply_selection_fade(frame: &mut Frame, area: Rect) {
+    let fade_steps = s::selection_fade_steps();
+    let trail_bg = s::selection_trail_bg();
+
+    // Collect trail start x per row (immutable scan first, then mutate).
+    let trail_xs: Vec<Option<u16>> = (area.y..area.y + area.height)
+        .map(|y| {
+            (area.x..area.x + area.width).find(|&x| {
+                frame.buffer_mut().cell(Position { x, y }).map(|c| c.bg == trail_bg).unwrap_or(false)
+            })
+        })
+        .collect();
+
+    for (row_idx, trail_x) in trail_xs.into_iter().enumerate() {
+        let Some(tx) = trail_x else { continue };
+        let y = area.y + row_idx as u16;
+        let available = (area.x + area.width).saturating_sub(tx);
+        let steps = fade_steps.min(available);
+        for step in 0..steps {
+            if let Some(cell) = frame.buffer_mut().cell_mut(Position { x: tx + step, y }) {
+                cell.set_bg(s::selection_bg_fade(step, fade_steps));
             }
         }
     }
