@@ -16,7 +16,7 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
     }
 
     let email: String = dialoguer::Input::new()
-        .with_prompt("Email address")
+        .with_prompt("Enter your email address to register or recover your account")
         .validate_with(|s: &String| -> Result<(), &str> {
             if s.contains('@') && s.len() <= 254 {
                 Ok(())
@@ -68,7 +68,7 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
         "Check your email at {} and click the verification link.",
         email
     );
-    println!("Waiting here until you do...");
+    println!("...then come back here...");
 
     let csr_code = poll_for_verification(server_url, &request_uuid).await?;
 
