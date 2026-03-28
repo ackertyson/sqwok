@@ -15,54 +15,34 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
         return resume_from_polling(server_url, identity_dir, &request_uuid).await;
     }
 
-    // Prompt: new account or recovery?
-    let choices = vec!["New account", "Recover existing account"];
-    let choice = dialoguer::Select::new()
-        .with_prompt("What would you like to do?")
-        .items(&choices)
-        .default(0)
-        .interact()?;
+    let email: String = dialoguer::Input::new()
+        .with_prompt("Email address")
+        .validate_with(|s: &String| -> Result<(), &str> {
+            if s.contains('@') && s.len() <= 254 {
+                Ok(())
+            } else {
+                Err("Please enter a valid email address")
+            }
+        })
+        .interact_text()?;
 
-    let (email, screenname) = if choice == 0 {
-        let email: String = dialoguer::Input::new()
-            .with_prompt("Email address")
-            .validate_with(|s: &String| -> Result<(), &str> {
-                if s.contains('@') && s.len() <= 254 {
-                    Ok(())
-                } else {
-                    Err("Please enter a valid email address")
-                }
-            })
-            .interact_text()?;
-        let screenname: String = dialoguer::Input::new()
-            .with_prompt("Screen name")
-            .validate_with(|s: &String| -> Result<(), &str> {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    Err("Screen name cannot be empty")
-                } else if trimmed.len() > 30 {
-                    Err("Screen name must be 30 characters or fewer")
-                } else if trimmed.chars().any(|c| c.is_control()) {
-                    Err("Screen name cannot contain control characters")
-                } else {
-                    Ok(())
-                }
-            })
-            .interact_text()?;
-        (email, screenname.trim().to_string())
-    } else {
-        let email: String = dialoguer::Input::new()
-            .with_prompt("Email address (for account recovery)")
-            .validate_with(|s: &String| -> Result<(), &str> {
-                if s.contains('@') && s.len() <= 254 {
-                    Ok(())
-                } else {
-                    Err("Please enter a valid email address")
-                }
-            })
-            .interact_text()?;
-        (email, "recovery".to_string())
-    };
+    let screenname: String = dialoguer::Input::new()
+        .with_prompt("Screen name")
+        .validate_with(|s: &String| -> Result<(), &str> {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Err("Screen name cannot be empty")
+            } else if trimmed.len() > 30 {
+                Err("Screen name must be 30 characters or fewer")
+            } else if trimmed.chars().any(|c| c.is_control()) {
+                Err("Screen name cannot contain control characters")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?;
+
+    let (email, screenname) = (email, screenname.trim().to_string());
 
     let request_uuid = uuid::Uuid::new_v4().to_string();
 
@@ -84,8 +64,11 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
     std::fs::create_dir_all(identity_dir)?;
     std::fs::write(&pending_path, &request_uuid)?;
 
-    println!("Verification email sent to {}.", email);
-    println!("Click the link in the email, then wait here...");
+    println!(
+        "Check your email at {} and click the verification link.",
+        email
+    );
+    println!("Waiting here until you do...");
 
     let csr_code = poll_for_verification(server_url, &request_uuid).await?;
 
@@ -239,10 +222,7 @@ async fn complete_registration(
 
     std::fs::remove_file(pending_path).ok();
 
-    println!(
-        "\nRegistration complete! Identity saved to {:?}",
-        identity_dir
-    );
+    println!("\nSetup complete! Identity saved to {:?}", identity_dir);
     println!("User UUID: {}", user_uuid);
 
     Ok(())
