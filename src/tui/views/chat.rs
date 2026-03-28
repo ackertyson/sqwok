@@ -336,19 +336,22 @@ fn wrap_words(text: &str, first_width: usize, cont_width: usize) -> Vec<String> 
 
     // Hard-break a word that is wider than the available column width.
     // Appends completed lines to `lines`, leaves the last partial in `current`/`col`.
-    let hard_break =
-        |word: &str, lines: &mut Vec<String>, current: &mut String, col: &mut usize, avail: &dyn Fn(usize) -> usize| {
-            for ch in word.chars() {
-                let ch_w = ch.width().unwrap_or(0);
-                let w = avail(lines.len());
-                if *col + ch_w > w && *col > 0 {
-                    lines.push(std::mem::take(current));
-                    *col = 0;
-                }
-                current.push(ch);
-                *col += ch_w;
+    let hard_break = |word: &str,
+                      lines: &mut Vec<String>,
+                      current: &mut String,
+                      col: &mut usize,
+                      avail: &dyn Fn(usize) -> usize| {
+        for ch in word.chars() {
+            let ch_w = ch.width().unwrap_or(0);
+            let w = avail(lines.len());
+            if *col + ch_w > w && *col > 0 {
+                lines.push(std::mem::take(current));
+                *col = 0;
             }
-        };
+            current.push(ch);
+            *col += ch_w;
+        }
+    };
 
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -448,10 +451,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             let author_chars = author.width();
             let prefix_len = indent_chars + author_chars + 2; // +2 for "  "
             let replies_tag = collapsed_sub_count.map(|n| format!("[{} replies]", n));
-            let replies_tag_len = replies_tag
-                .as_ref()
-                .map(|s| 2 + s.width())
-                .unwrap_or(0);
+            let replies_tag_len = replies_tag.as_ref().map(|s| 2 + s.width()).unwrap_or(0);
             let ts_suffix = format!("  {}", timestamp);
             let ts_len = replies_tag_len + ts_suffix.width();
             let first_avail = w.saturating_sub(prefix_len + ts_len);
@@ -644,8 +644,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 actual_bg
             };
             frame.render_widget(
-                Paragraph::new(line)
-                    .style(Style::default().bg(para_bg)),
+                Paragraph::new(line).style(Style::default().bg(para_bg)),
                 area,
             );
         }
@@ -745,9 +744,15 @@ fn apply_selection_fade(frame: &mut Frame, area: Rect) {
     let trail_xs: Vec<Option<u16>> = (area.y..area.y + area.height)
         .map(|y| {
             let last_text_x = (area.x..area.x + area.width).rev().find(|&x| {
-                frame.buffer_mut().cell(Position { x, y }).map(|c| c.bg != trail_bg).unwrap_or(false)
+                frame
+                    .buffer_mut()
+                    .cell(Position { x, y })
+                    .map(|c| c.bg != trail_bg)
+                    .unwrap_or(false)
             });
-            last_text_x.map(|x| x + 1).filter(|&x| x < area.x + area.width)
+            last_text_x
+                .map(|x| x + 1)
+                .filter(|&x| x < area.x + area.width)
         })
         .collect();
 

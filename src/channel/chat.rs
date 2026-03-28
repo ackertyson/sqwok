@@ -132,25 +132,30 @@ impl ChatChannel {
         )
     }
 
-    pub fn sync_request_frame(&self) -> Frame {
+    pub fn sync_catchup_frame(&self) -> Frame {
         self.frame(
-            "sync:request",
+            "sync:catchup",
             serde_json::json!({
-                "from_seq": self.high_water + 1,
-                "to_seq": i64::MAX
+                "high_water": self.high_water
             }),
         )
     }
 
-    /// Returns Some(frame) when a response should be sent back (e.g. for key:request).
+    pub fn sync_scrollback_frame(&self, before_seq: i64, limit: i64) -> Frame {
+        self.frame(
+            "sync:scrollback",
+            serde_json::json!({
+                "before_seq": before_seq,
+                "limit": limit
+            }),
+        )
+    }
+
+    /// Returns Some(frame) when a response should be sent back (e.g. for key:request, sync:query).
     pub fn handle_incoming(&mut self, frame: &Frame) -> Result<Option<Frame>> {
         match frame.event.as_str() {
             "msg:new" => {
                 self.handle_msg_new(&frame.payload)?;
-                Ok(None)
-            }
-            "msg:buffered" => {
-                self.handle_msg_buffered(&frame.payload)?;
                 Ok(None)
             }
             "presence_state" => {
@@ -161,6 +166,7 @@ impl ChatChannel {
                 self.handle_sync_push(&frame.payload)?;
                 Ok(None)
             }
+            "sync:query" => self.handle_sync_query(&frame.payload),
             "key:distribute" => {
                 self.handle_key_distribute(&frame.payload)?;
                 Ok(None)
@@ -205,15 +211,6 @@ impl ChatChannel {
         Ok(())
     }
 
-    fn handle_msg_buffered(&mut self, payload: &Value) -> Result<()> {
-        if let Some(messages) = payload["messages"].as_array() {
-            for msg in messages {
-                self.handle_msg_new(msg)?;
-            }
-        }
-        Ok(())
-    }
-
     fn handle_presence_state(&self, payload: &Value) -> Result<()> {
         if let Some(members) = payload["members"].as_array() {
             println!("Online members:");
@@ -228,8 +225,33 @@ impl ChatChannel {
         Ok(())
     }
 
+    fn handle_sync_query(&self, payload: &Value) -> Result<Option<Frame>> {
+        let high = self.store.get_high_water().unwrap_or(0);
+        let low = self.store.get_low_water().unwrap_or(0);
+        let requester = payload["requester"].as_str().unwrap_or("");
+        let from_seq = payload["from_seq"].as_i64();
+        let to_seq = payload["to_seq"].as_i64();
+        dlog!(
+            "[SYNC] handle_sync_query: requester={} from_seq={:?} to_seq={:?} → responding low_water={} high_water={}",
+            requester, from_seq, to_seq, low, high
+        );
+
+        Ok(Some(self.frame(
+            "sync:offer",
+            serde_json::json!({
+                "requester": requester,
+                "low_water": low,
+                "high_water": high
+            }),
+        )))
+    }
+
     fn handle_sync_push(&mut self, payload: &Value) -> Result<()> {
         if let Some(messages) = payload["messages"].as_array() {
+            dlog!(
+                "[SYNC] handle_sync_push: received {} messages, current high_water={}",
+                messages.len(), self.high_water
+            );
             for msg in messages {
                 self.store.insert_message(msg)?;
                 let seq = msg["global_seq"].as_i64().unwrap_or(0);
@@ -237,6 +259,7 @@ impl ChatChannel {
                     self.high_water = seq;
                 }
             }
+            dlog!("[SYNC] handle_sync_push: new high_water={}", self.high_water);
         }
         Ok(())
     }

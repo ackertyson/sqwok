@@ -216,6 +216,10 @@ pub struct AppState {
     pub typing_indicators_updated: Option<Instant>,
     /// When true, run loop spawns an invite-list fetch
     pub pending_list_invites: bool,
+    /// Whether a peer scrollback request is in-flight
+    pub scrollback_pending: bool,
+    /// Rate-limit: last time a scrollback sync was requested
+    pub last_scrollback_request: Option<Instant>,
 }
 
 impl AppState {
@@ -256,6 +260,8 @@ impl AppState {
             pending_leave_chat: false,
             pending_add_member: None,
             pending_list_invites: false,
+            scrollback_pending: false,
+            last_scrollback_request: None,
             last_typing_notify: None,
             last_typing_target: None,
             typing_indicators: HashSet::new(),
@@ -909,8 +915,15 @@ impl AppState {
             .unwrap_or("unknown")
             .to_string();
         let global_seq = payload["global_seq"].as_i64().unwrap_or(0);
-        let thread_uuid = payload["thread_uuid"].as_str().map(|s| s.to_string());
-        let reply_to_uuid = payload["reply_to_uuid"].as_str().map(|s| s.to_string());
+        // Client-side thread validation: discard refs that don't resolve locally
+        let thread_uuid = payload["thread_uuid"]
+            .as_str()
+            .filter(|u| self.msg_store.by_uuid.contains_key(*u))
+            .map(|s| s.to_string());
+        let reply_to_uuid = payload["reply_to_uuid"]
+            .as_str()
+            .filter(|u| thread_uuid.is_some() && self.msg_store.by_uuid.contains_key(*u))
+            .map(|s| s.to_string());
         let timestamp = payload["ts"]
             .as_str()
             .or(payload["client_ts"].as_str())
@@ -960,6 +973,7 @@ impl AppState {
     }
 
     /// Load older messages from SQLite into the in-memory store (scrollback).
+    /// When local storage is exhausted, requests older messages from peers.
     pub fn load_scrollback(&mut self) {
         if !self.msg_store.has_more_above {
             return;
@@ -977,7 +991,21 @@ impl AppState {
         };
 
         if older.is_empty() {
-            self.msg_store.has_more_above = false;
+            // Local SQLite has no older messages — request from peers
+            if before_seq > 1 && !self.scrollback_pending {
+                let rate_ok = self
+                    .last_scrollback_request
+                    .map(|t| t.elapsed() >= std::time::Duration::from_secs(2))
+                    .unwrap_or(true);
+                if rate_ok {
+                    if let Some(ref ch) = self.chat_channel {
+                        let frame = ch.sync_scrollback_frame(before_seq, 50);
+                        let _ = self.ws_tx.send(frame.encode());
+                        self.scrollback_pending = true;
+                        self.last_scrollback_request = Some(Instant::now());
+                    }
+                }
+            }
             return;
         }
 
@@ -1013,6 +1041,8 @@ impl AppState {
     pub fn clear_chat_state(&mut self) {
         self.msg_store.clear();
         self.members.clear();
+        self.scrollback_pending = false;
+        self.last_scrollback_request = None;
         for pane in &mut self.panes {
             pane.clear_view_state();
         }
@@ -1082,9 +1112,10 @@ impl AppState {
             dlog!("join_chat({}) — already have keys", chat_uuid);
         }
 
-        // Request message backfill from peers
+        // Request message catchup from peers
         if let Some(ref ch) = self.chat_channel {
-            let sync = ch.sync_request_frame();
+            dlog!("[SYNC] requesting sync:catchup with high_water={}", ch.high_water);
+            let sync = ch.sync_catchup_frame();
             let _ = self.ws_tx.send(sync.encode());
         }
     }
@@ -1093,15 +1124,6 @@ impl AppState {
         dlog!("frame: event={} topic={}", frame.event, frame.topic);
         match frame.event.as_str() {
             "msg:new" => self.handle_msg_new(&frame.payload),
-            "msg:buffered" => {
-                if let Some(msgs) = frame.payload["messages"].as_array() {
-                    let msgs: Vec<_> = msgs.clone();
-                    for msg in msgs {
-                        let pseudo_frame = Frame::new(&frame.topic, "msg:new", msg);
-                        self.handle_msg_new(&pseudo_frame.payload);
-                    }
-                }
-            }
             "presence_state" => self.handle_presence(&frame.payload),
             "presence_diff" => self.handle_presence_diff(&frame.payload),
             "sync:push" => {
@@ -1112,6 +1134,7 @@ impl AppState {
                         self.handle_msg_new(&pseudo_frame.payload);
                     }
                 }
+                self.scrollback_pending = false;
             }
             "member:removed" => {
                 let removed_uuid = frame.payload["user_uuid"]
@@ -1137,7 +1160,11 @@ impl AppState {
                     self.rotate_and_distribute_keys();
                 }
             }
-            "key:distribute" | "key:request" | "phx_reply" | "phx_error" | "sync:assign" => {
+            "key:distribute" | "key:request" | "phx_reply" | "phx_error" | "sync:assign"
+            | "sync:query" => {
+                if frame.event == "sync:query" {
+                    dlog!("[SYNC] sync:query arrived in frame dispatch, payload={}", frame.payload);
+                }
                 // Delegate to ChatChannel for crypto/sync handling
                 if let Some(ref mut ch) = self.chat_channel {
                     match ch.handle_incoming(frame) {
@@ -1176,7 +1203,12 @@ impl AppState {
                             &ch.store, requester, from, to, topic,
                         ) {
                             Ok(frames) => {
-                                for f in frames {
+                                dlog!(
+                                    "[SYNC] sync:assign: requester={} from={} to={} → built {} frames",
+                                    requester, from, to, frames.len()
+                                );
+                                for mut f in frames {
+                                    f.join_ref = ch.join_ref.clone();
                                     let _ = self.ws_tx.send(f.encode());
                                 }
                             }

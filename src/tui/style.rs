@@ -14,7 +14,6 @@ fn is_truecolor() -> bool {
     *TRUECOLOR.get_or_init(supports_truecolor)
 }
 
-
 /// Select RGB if truecolor is supported, otherwise use 256-color indexed fallback.
 fn color(rgb: (u8, u8, u8), indexed: u8) -> Color {
     if is_truecolor() {
@@ -90,7 +89,11 @@ pub fn selection_bg() -> Color {
 /// Truecolor gets 8 for a silky smooth ramp; 256-colour gets 4 since we're
 /// limited to hand-picked indexed stops anyway.
 pub fn selection_fade_steps() -> u16 {
-    if is_truecolor() { 8 } else { 4 }
+    if is_truecolor() {
+        8
+    } else {
+        4
+    }
 }
 
 /// Interpolated color for the fade zone at the leading edge of the trailing
@@ -100,8 +103,8 @@ pub fn selection_fade_steps() -> u16 {
 pub fn selection_bg_fade(step: u16, total_steps: u16) -> Color {
     let t = (step + 1) as f32 / (total_steps + 1) as f32;
     if is_truecolor() {
-        let (r0, g0, b0) = (30u8, 30u8, 50u8);   // selection_bg
-        let (r1, g1, b1) = (90u8, 60u8, 160u8);  // selection_trail_bg
+        let (r0, g0, b0) = (30u8, 30u8, 50u8); // selection_bg
+        let (r1, g1, b1) = (90u8, 60u8, 160u8); // selection_trail_bg
         Color::Rgb(
             (r0 as f32 + (r1 - r0) as f32 * t) as u8,
             (g0 as f32 + (g1 - g0) as f32 * t) as u8,

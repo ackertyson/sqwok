@@ -104,6 +104,15 @@ impl MessageStore {
         Ok(hw)
     }
 
+    pub fn get_low_water(&self) -> Result<i64> {
+        let lw: i64 = self.conn.query_row(
+            "SELECT COALESCE(MIN(global_seq), 0) FROM messages",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(lw)
+    }
+
     pub fn get_range(&self, from_seq: i64, to_seq: i64) -> Result<Vec<Value>> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, sender_uuid, thread_uuid, reply_to_uuid, global_seq,
