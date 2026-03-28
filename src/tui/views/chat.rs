@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Clear, Paragraph},
     Frame,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::tui::{
     app::{AppState, Gutter, RenderRow},
@@ -333,65 +334,52 @@ fn wrap_words(text: &str, first_width: usize, cont_width: usize) -> Vec<String> 
         .max(1)
     };
 
+    // Hard-break a word that is wider than the available column width.
+    // Appends completed lines to `lines`, leaves the last partial in `current`/`col`.
+    let hard_break =
+        |word: &str, lines: &mut Vec<String>, current: &mut String, col: &mut usize, avail: &dyn Fn(usize) -> usize| {
+            for ch in word.chars() {
+                let ch_w = ch.width().unwrap_or(0);
+                let w = avail(lines.len());
+                if *col + ch_w > w && *col > 0 {
+                    lines.push(std::mem::take(current));
+                    *col = 0;
+                }
+                current.push(ch);
+                *col += ch_w;
+            }
+        };
+
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
-    let mut current_len = 0usize;
+    let mut current_col = 0usize; // display columns used on the current line
 
     for word in text.split_whitespace() {
-        let word_chars: Vec<char> = word.chars().collect();
-        let word_len = word_chars.len();
+        let word_w = word.width(); // display columns
 
-        if current_len == 0 {
-            // At the start of a line — place word or hard-break it
+        if current_col == 0 {
             let w = avail(lines.len());
-            if word_len <= w {
+            if word_w <= w {
                 current.push_str(word);
-                current_len = word_len;
+                current_col = word_w;
             } else {
-                let mut pos = 0;
-                while pos < word_len {
-                    let w = avail(lines.len());
-                    let end = (pos + w).min(word_len);
-                    let chunk: String = word_chars[pos..end].iter().collect();
-                    current.push_str(&chunk);
-                    current_len += end - pos;
-                    if end < word_len {
-                        lines.push(std::mem::take(&mut current));
-                        current_len = 0;
-                    }
-                    pos = end;
-                }
+                hard_break(word, &mut lines, &mut current, &mut current_col, &avail);
             }
         } else {
             let w = avail(lines.len());
-            if current_len + 1 + word_len <= w {
-                // Word fits on current line with a space
+            if current_col + 1 + word_w <= w {
                 current.push(' ');
                 current.push_str(word);
-                current_len += 1 + word_len;
+                current_col += 1 + word_w;
             } else {
-                // Flush current line and start a new one
                 lines.push(std::mem::take(&mut current));
-                current_len = 0;
+                current_col = 0;
                 let w = avail(lines.len());
-                if word_len <= w {
+                if word_w <= w {
                     current.push_str(word);
-                    current_len = word_len;
+                    current_col = word_w;
                 } else {
-                    // Hard-break the oversized word
-                    let mut pos = 0;
-                    while pos < word_len {
-                        let w = avail(lines.len());
-                        let end = (pos + w).min(word_len);
-                        let chunk: String = word_chars[pos..end].iter().collect();
-                        current.push_str(&chunk);
-                        current_len += end - pos;
-                        if end < word_len {
-                            lines.push(std::mem::take(&mut current));
-                            current_len = 0;
-                        }
-                        pos = end;
-                    }
+                    hard_break(word, &mut lines, &mut current, &mut current_col, &avail);
                 }
             }
         }
@@ -454,18 +442,18 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             let pending_suffix = if *is_pending { " sending..." } else { "" };
             let full_body = format!("{}{}", body, pending_suffix);
 
-            // Compute layout widths
+            // Compute layout widths (in terminal columns, not char count)
             let w = avail_width as usize;
-            let indent_chars = indent_str.chars().count();
-            let author_chars = author.chars().count();
+            let indent_chars = indent_str.width();
+            let author_chars = author.width();
             let prefix_len = indent_chars + author_chars + 2; // +2 for "  "
             let replies_tag = collapsed_sub_count.map(|n| format!("[{} replies]", n));
             let replies_tag_len = replies_tag
                 .as_ref()
-                .map(|s| 2 + s.chars().count())
+                .map(|s| 2 + s.width())
                 .unwrap_or(0);
             let ts_suffix = format!("  {}", timestamp);
-            let ts_len = replies_tag_len + ts_suffix.chars().count();
+            let ts_len = replies_tag_len + ts_suffix.width();
             let first_avail = w.saturating_sub(prefix_len + ts_len);
             let cont_avail = w.saturating_sub(prefix_len).max(1);
 
@@ -588,22 +576,33 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             };
             let author_color = *author_color;
             let replies_tag = format!("[{} replies]", reply_count);
-            // Compute how many chars are reserved for non-preview content so we
+            // Compute how many columns are reserved for non-preview content so we
             // only truncate the preview when it would actually crowd out the
             // replies count or timestamp.
-            let reserved = author.chars().count()
+            let reserved = author.width()
                 + 2  // "  " after author
                 + 2  // "  " before replies tag
-                + replies_tag.chars().count()
+                + replies_tag.width()
                 + 2  // "  " before timestamp
-                + timestamp.chars().count()
+                + timestamp.width()
                 + if *typing_active { 4 } else { 0 }; // " ..."
             let preview_avail = (avail_width as usize).saturating_sub(reserved);
-            let preview_chars = preview.chars().count();
-            let truncated_preview: String = if preview_chars <= preview_avail {
+            let preview_display_width = preview.width();
+            let truncated_preview: String = if preview_display_width <= preview_avail {
                 preview.clone()
             } else {
-                preview.chars().take(preview_avail.saturating_sub(1)).collect::<String>() + "…"
+                // Truncate to fit within preview_avail - 1 columns (reserving 1 for "…")
+                let mut col = 0usize;
+                let mut s = String::new();
+                for ch in preview.chars() {
+                    let ch_w = ch.width().unwrap_or(0);
+                    if col + ch_w > preview_avail.saturating_sub(1) {
+                        break;
+                    }
+                    s.push(ch);
+                    col += ch_w;
+                }
+                s + "…"
             };
             let mut spans = vec![
                 Span::styled(
@@ -730,16 +729,25 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
 /// cells (bg = selection_trail_bg). This function finds where the trail starts
 /// on each row and blends the first few cells from selection_bg into
 /// selection_trail_bg so the vivid purple eases in rather than cutting in hard.
+///
+/// Wide characters (e.g. emoji) leave their continuation cell with trail_bg
+/// because ratatui's Paragraph pre-fills the area with the paragraph bg and
+/// then skips the continuation cell. To avoid triggering the fade on those
+/// spurious mid-text trail_bg cells, we scan right-to-left and find where the
+/// trailing trail_bg block actually begins.
 fn apply_selection_fade(frame: &mut Frame, area: Rect) {
     let fade_steps = s::selection_fade_steps();
     let trail_bg = s::selection_trail_bg();
 
     // Collect trail start x per row (immutable scan first, then mutate).
+    // Scan right-to-left: find the rightmost cell that is NOT trail_bg; the
+    // trail begins at the cell after it.
     let trail_xs: Vec<Option<u16>> = (area.y..area.y + area.height)
         .map(|y| {
-            (area.x..area.x + area.width).find(|&x| {
-                frame.buffer_mut().cell(Position { x, y }).map(|c| c.bg == trail_bg).unwrap_or(false)
-            })
+            let last_text_x = (area.x..area.x + area.width).rev().find(|&x| {
+                frame.buffer_mut().cell(Position { x, y }).map(|c| c.bg != trail_bg).unwrap_or(false)
+            });
+            last_text_x.map(|x| x + 1).filter(|&x| x < area.x + area.width)
         })
         .collect();
 

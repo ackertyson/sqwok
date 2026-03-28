@@ -140,14 +140,6 @@ pub fn shortcut_key_color() -> Color {
 }
 
 #[inline]
-pub fn pill_color() -> Color {
-    color((180, 120, 255), 135)
-}
-#[inline]
-pub fn pill_fg() -> Color {
-    color((240, 240, 252), 255)
-}
-#[inline]
 pub fn selection_trail_bg() -> Color {
     color((90, 60, 160), 247)
 }

@@ -34,6 +34,7 @@ futures-util = "0.3"
 rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 ratatui = "0.29"
+unicode-width = "0.2"
 crossterm = { version = "0.28", features = ["event-stream"] }
 clap = { version = "4", features = ["derive"] }
 terminal_size = "0.4"

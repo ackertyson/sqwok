@@ -82,39 +82,14 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
         frame.render_widget(inv_list, chunks[1]);
     }
 
-    let selected_idx = app.picker_state.selected();
-
     let items: Vec<ListItem> = app
         .chat_list
         .iter()
-        .enumerate()
-        .map(|(i, chat)| {
-            let is_selected = selected_idx == Some(i);
-
-            let mut spans: Vec<Span> = if is_selected {
-                vec![
-                    Span::styled(
-                        "\u{2590}",
-                        Style::default().fg(s::pill_color()).bg(s::selection_bg()),
-                    ),
-                    Span::styled(
-                        format!(" {} ", chat.topic),
-                        Style::default()
-                            .fg(s::pill_fg())
-                            .bg(s::pill_color())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "\u{258C}",
-                        Style::default().fg(s::pill_color()).bg(s::selection_bg()),
-                    ),
-                ]
-            } else {
-                vec![Span::styled(
-                    chat.topic.clone(),
-                    Style::default().fg(s::fg()).add_modifier(Modifier::BOLD),
-                )]
-            };
+        .map(|chat| {
+            let mut spans: Vec<Span> = vec![Span::styled(
+                chat.topic.clone(),
+                Style::default().fg(s::fg()).add_modifier(Modifier::BOLD),
+            )];
 
             if let Some(desc) = &chat.description {
                 spans.push(Span::raw("  "));
