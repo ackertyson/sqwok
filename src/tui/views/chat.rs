@@ -31,13 +31,10 @@ pub fn draw_top_bar(frame: &mut Frame, area: Rect, app: &AppState) {
 
     // Build the right-side status string first so we can reserve space for it.
     let total = app.members.len();
-    let online = app.members.iter().filter(|m| m.online).count();
-    let members_text = if online < total {
-        format!("{} members ({} online)", total, online)
-    } else {
-        format!("{} members", total)
-    };
-    let right_text = format!("{}  {}", members_text, keys_indicator);
+    let online = app.online_count();
+    let members_text = format!("{} members", total);
+    let online_text = format!("  {} online", online);
+    let right_text = format!("{}{}  {}", members_text, online_text, keys_indicator);
     let right_width = (right_text.len() as u16).min(area.width);
     let left_width = area.width.saturating_sub(right_width);
 
@@ -55,9 +52,10 @@ pub fn draw_top_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     let left_area = ratatui::layout::Rect::new(area.x, area.y, left_width, area.height);
     frame.render_widget(Paragraph::new(Line::from(left_spans)), left_area);
 
-    // Right area: member count + keys indicator — always visible.
+    // Right area: member count + online count + keys indicator — always visible.
     let right_spans = vec![
         Span::styled(members_text, Style::default().fg(s::dim())),
+        Span::styled(online_text, Style::default().fg(s::fg())),
         Span::raw("  "),
         Span::styled(
             keys_indicator,

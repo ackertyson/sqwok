@@ -158,8 +158,8 @@ impl ChatChannel {
                 self.handle_msg_new(&frame.payload)?;
                 Ok(None)
             }
-            "presence_state" => {
-                self.handle_presence_state(&frame.payload)?;
+            "member_list" => {
+                self.handle_member_list(&frame.payload)?;
                 Ok(None)
             }
             "sync:push" => {
@@ -211,9 +211,9 @@ impl ChatChannel {
         Ok(())
     }
 
-    fn handle_presence_state(&self, payload: &Value) -> Result<()> {
+    fn handle_member_list(&self, payload: &Value) -> Result<()> {
         if let Some(members) = payload["members"].as_array() {
-            println!("Online members:");
+            println!("Members:");
             for m in members {
                 println!(
                     "  {} ({})",

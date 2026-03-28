@@ -58,7 +58,7 @@ AppState operates in two modes: `ChatPicker` (chat list) and `Chat` (active conv
 
 ### Phoenix Channel Protocol
 
-Server communication uses Phoenix channel frames: `{"topic", "event", "ref", "join_ref", "payload"}`. Key inbound events: `msg:new`, `msg:buffered`, `presence_state`, `presence_diff`, `member:removed`, `key:request`, `key:distribute`, `typing:active`, `sync:push`, `sync:assign`, `chat:added`, `chat:removed`.
+Server communication uses Phoenix channel frames: `{"topic", "event", "ref", "join_ref", "payload"}`. Key inbound events: `msg:new`, `msg:buffered`, `member_list`, `presence_state`, `presence_diff`, `member:removed`, `key:request`, `key:distribute`, `typing:active`, `sync:push`, `sync:assign`, `chat:added`, `chat:removed`.
 
 ## Environment Variables
 

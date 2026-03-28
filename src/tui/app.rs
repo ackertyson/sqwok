@@ -355,6 +355,7 @@ impl AppState {
             if let Some(ref ch) = self.chat_channel {
                 let _ = ch.store.mark_read(uuid);
             }
+            self.update_title();
         }
 
         // Auto-focus input rows when navigated to
@@ -1124,6 +1125,7 @@ impl AppState {
         dlog!("frame: event={} topic={}", frame.event, frame.topic);
         match frame.event.as_str() {
             "msg:new" => self.handle_msg_new(&frame.payload),
+            "member_list" => self.handle_member_list(&frame.payload),
             "presence_state" => self.handle_presence(&frame.payload),
             "presence_diff" => self.handle_presence_diff(&frame.payload),
             "sync:push" => {
@@ -1303,9 +1305,13 @@ impl AppState {
         }
         self.highlights.insert(uuid, Instant::now());
         self.msg_store.insert(msg);
+        self.update_title();
     }
 
-    fn handle_presence(&mut self, payload: &serde_json::Value) {
+    /// Handle `member_list` — the full chat roster from the database.
+    /// All members start as offline; `presence_state` and `presence_diff`
+    /// flip the actually-online ones.
+    fn handle_member_list(&mut self, payload: &serde_json::Value) {
         self.members.clear();
         let chat_uuid = self
             .current_chat
@@ -1314,7 +1320,6 @@ impl AppState {
         if let Some(members) = payload["members"].as_array() {
             for m in members {
                 let uuid_str = m["user_uuid"].as_str().unwrap_or("").to_string();
-                // Use our known screenname for ourselves rather than relying on server metadata.
                 let screenname = if uuid_str == self.my_uuid {
                     self.my_screenname.clone()
                 } else {
@@ -1327,10 +1332,43 @@ impl AppState {
                 self.members.push(Member {
                     uuid: uuid_str,
                     screenname,
-                    online: true,
+                    online: false,
                 });
             }
         }
+        self.update_title();
+    }
+
+    /// Handle `presence_state` — Phoenix Presence list of currently-online users.
+    /// Payload is a map of `{uuid: {metas: [{screenname, ...}]}}`.
+    fn handle_presence(&mut self, payload: &serde_json::Value) {
+        if let Some(obj) = payload.as_object() {
+            for (uuid, meta) in obj {
+                // Skip keys that aren't UUIDs (e.g. stale server sending
+                // the old {members: [...]} format under this event name).
+                if Uuid::parse_str(uuid).is_err() {
+                    continue;
+                }
+                if let Some(existing) = self.members.iter_mut().find(|m| &m.uuid == uuid) {
+                    existing.online = true;
+                } else {
+                    let screenname = if uuid == &self.my_uuid {
+                        self.my_screenname.clone()
+                    } else {
+                        meta["metas"][0]["screenname"]
+                            .as_str()
+                            .unwrap_or("?")
+                            .to_string()
+                    };
+                    self.members.push(Member {
+                        uuid: uuid.clone(),
+                        screenname,
+                        online: true,
+                    });
+                }
+            }
+        }
+        self.update_title();
     }
 
     fn handle_presence_diff(&mut self, payload: &serde_json::Value) {
@@ -1439,6 +1477,7 @@ impl AppState {
                 dlog!("presence_diff: no chat_channel, skipping key distribution");
             }
         }
+        self.update_title();
     }
 
     pub fn tick(&mut self) {
@@ -1541,5 +1580,31 @@ impl AppState {
             &self.highlights,
             &self.typing_indicators,
         )
+    }
+
+    /// Number of online peers (excludes self).
+    pub fn online_count(&self) -> usize {
+        self.members
+            .iter()
+            .filter(|m| m.online && m.uuid != self.my_uuid)
+            .count()
+    }
+
+    /// Compute and set the terminal title reflecting unread count and online members.
+    pub fn update_title(&self) {
+        let unread = self.msg_store.by_uuid.values().filter(|m| !m.read).count();
+        let online = self.online_count();
+        let mut title = String::new();
+        if unread > 0 {
+            title.push_str(&format!("[{} new]", unread));
+        }
+        if online > 0 {
+            title.push_str(&format!("[{} online]", online));
+        }
+        if !title.is_empty() {
+            title.push(' ');
+        }
+        title.push_str("sqwok");
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::SetTitle(title));
     }
 }
