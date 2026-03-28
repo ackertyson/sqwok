@@ -159,7 +159,7 @@ fn draw_display(frame: &mut Frame, area: ratatui::layout::Rect, state: &InviteMo
                 };
                 Line::from(vec![
                     Span::styled(marker, style),
-                    Span::styled(inv.display_code.clone(), style),
+                    Span::styled(format!("sqwok-{}", inv.display_code), style),
                     Span::styled(
                         format!("  {}  exp: {}", uses, inv.expires_at),
                         Style::default().fg(s::dim()),

@@ -238,7 +238,9 @@ async fn main() -> Result<()> {
         }
         Some(SubCommand::Join { code }) => {
             // Let the run loop handle redeeming after WS connects
-            app.pending_redeem = Some(code.to_uppercase().replace('-', ""));
+            let c = code.to_uppercase();
+            let c = c.strip_prefix("SQWOK-").unwrap_or(&c);
+            app.pending_redeem = Some(c.replace('-', ""));
         }
         Some(SubCommand::Help) | None => {}
     }

@@ -144,11 +144,11 @@ pub async fn run(
             }
             Some(AppEvent::InviteCreated(info)) => {
                 if let Some(ModalState::InviteCreate(ref mut inv_modal)) = app.modal {
-                    inv_modal.created_code = Some(info.display_code.clone());
+                    inv_modal.created_code = Some(format!("sqwok-{}", info.display_code));
                     inv_modal.step = InviteStep::Display;
                 }
                 app.toast = Some((
-                    format!("Invite created: {}", info.display_code),
+                    format!("Invite created: sqwok-{}", info.display_code),
                     std::time::Instant::now() + std::time::Duration::from_secs(5),
                 ));
             }

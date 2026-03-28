@@ -386,7 +386,9 @@ fn execute_command(app: &mut AppState, action: CommandAction) -> Action {
         }
         CommandAction::JoinByCode(code) => {
             if !code.is_empty() {
-                app.pending_redeem = Some(code.to_uppercase().replace('-', ""));
+                let c = code.to_uppercase();
+                let c = c.strip_prefix("SQWOK-").unwrap_or(&c);
+                app.pending_redeem = Some(c.replace('-', ""));
             }
             Action::Continue
         }
