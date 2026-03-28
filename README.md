@@ -61,7 +61,19 @@ Credentials are stored in `~/.sqwok/identity/`:
 
 ## Account Recovery
 
-If you lose your device and need to re-register on a new one, run `sqwok` and choose "I have an account" at the prompt. The server issues a new cert with your original UUID; your chat history from the old device is not recoverable.
+If you lose your device (or remove `~/.sqwok/identity/`) and need to re-register, run `sqwok` and choose "Recover existing account" at the prompt. The server issues a new cert with your original UUID and disconnects any old sessions.
+
+When you rejoin a chat, other online members will automatically sync you the message history they have and re-distribute encryption keys for your new device. How much history you recover depends on what your peers still have locally — messages that have fallen off every peer's device are gone for good.
+
+## How Messages Work
+
+sqwok is designed so the server never sees or stores your messages. When you send a message, the server assigns it a sequence number and relays it to everyone who's currently online — but it doesn't keep a copy. Your chat history lives entirely on your device.
+
+If you send a message and nobody else in the chat is online, it's stored only on your machine until another member comes online. When that happens, your client automatically shares the messages they missed — no action required on either side. If multiple people are online, the work of catching up a returning member is split across them.
+
+This means your local chat database is the authoritative record of your conversations. If you lose your device, your message history is only recoverable from other members' devices when they're online and still have those messages.
+
+Encryption keys are the one exception: when a group's keys rotate while someone is offline, the server holds onto the new keys (not the messages) for up to 30 days so that person can still decrypt everything once they reconnect.
 
 ## Navigation
 
@@ -71,11 +83,10 @@ If you lose your device and need to re-register on a new one, run `sqwok` and ch
 | `→` | Expand a collapsed thread |
 | `←` | Collapse an expanded thread |
 | `Enter` | Focus a message's thread input; send from an active input |
-| `r` | Reply to the selected message |
 | `Alt+←` / `Alt+→` | Switch pane focus |
 | `Alt+\` | Split pane vertically |
 | `Alt+-` | Split pane horizontally |
-| `Alt+W` | Close the current pane |
+| `Alt+w` | Close the current pane |
 | `/` | Open command bar |
 | `Tab` | Cycle command bar suggestions |
 | `Esc` | Dismiss command bar or modal |
