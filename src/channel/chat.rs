@@ -250,7 +250,8 @@ impl ChatChannel {
         if let Some(messages) = payload["messages"].as_array() {
             dlog!(
                 "[SYNC] handle_sync_push: received {} messages, current high_water={}",
-                messages.len(), self.high_water
+                messages.len(),
+                self.high_water
             );
             for msg in messages {
                 self.store.insert_message(msg)?;
@@ -259,7 +260,10 @@ impl ChatChannel {
                     self.high_water = seq;
                 }
             }
-            dlog!("[SYNC] handle_sync_push: new high_water={}", self.high_water);
+            dlog!(
+                "[SYNC] handle_sync_push: new high_water={}",
+                self.high_water
+            );
         }
         Ok(())
     }

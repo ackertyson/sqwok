@@ -1115,7 +1115,10 @@ impl AppState {
 
         // Request message catchup from peers
         if let Some(ref ch) = self.chat_channel {
-            dlog!("[SYNC] requesting sync:catchup with high_water={}", ch.high_water);
+            dlog!(
+                "[SYNC] requesting sync:catchup with high_water={}",
+                ch.high_water
+            );
             let sync = ch.sync_catchup_frame();
             let _ = self.ws_tx.send(sync.encode());
         }
@@ -1165,7 +1168,10 @@ impl AppState {
             "key:distribute" | "key:request" | "phx_reply" | "phx_error" | "sync:assign"
             | "sync:query" => {
                 if frame.event == "sync:query" {
-                    dlog!("[SYNC] sync:query arrived in frame dispatch, payload={}", frame.payload);
+                    dlog!(
+                        "[SYNC] sync:query arrived in frame dispatch, payload={}",
+                        frame.payload
+                    );
                 }
                 // Delegate to ChatChannel for crypto/sync handling
                 if let Some(ref mut ch) = self.chat_channel {

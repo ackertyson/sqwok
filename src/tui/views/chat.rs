@@ -123,12 +123,31 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
 
     // Clamp selected to valid row range.
     let selected = pane.selected.min(total_rows.saturating_sub(1));
-    // Keep selected row centered in the viewport. When near the top,
-    // saturating_sub clamps to 0 and the cursor drifts above the midline —
-    // but only if there is no older history left to load (the Up handler loads
-    // scrollback when selected == 0 and has_more_above). At the bottom, the
-    // list may not fill the viewport; that empty space is intentional.
-    let scroll_offset = selected.saturating_sub(mid);
+    // Compute scroll_offset using actual visual line heights rather than a
+    // simple row-count offset.  The naive `selected - mid` formula assumes
+    // every row is one terminal line tall; wrapped/multi-line messages break
+    // that assumption — the rows between scroll_offset and selected can
+    // collectively exceed `area.height`, pushing the selected row (often the
+    // Input prompt) past `area_bottom` so it is never rendered.
+    //
+    // Instead, walk backwards from `selected`, accumulating visual lines until
+    // we reach ~half the viewport.  For single-line messages this produces the
+    // same result as the old formula; for multi-line messages it ensures the
+    // selected row is always visible.
+    let scroll_offset = {
+        let mut offset = selected;
+        let mut lines_above = 0u16;
+        let mid_u16 = mid as u16;
+        while offset > 0 {
+            let h = row_visual_height(&rows[offset - 1], content_width);
+            if lines_above + h > mid_u16 {
+                break;
+            }
+            lines_above += h;
+            offset -= 1;
+        }
+        offset
+    };
 
     // Show "scroll up for older messages" hint when there's more history and
     // the cursor is at the first row. Rendered in row 0; messages start below.
