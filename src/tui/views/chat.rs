@@ -602,7 +602,8 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 + replies_tag.width()
                 + 2  // "  " before timestamp
                 + timestamp.width()
-                + if *typing_active { 4 } else { 0 }; // " ..."
+                + if *typing_active { 4 } else { 0 } // " ..."
+                + 8; // leave some space in right margin for selected row highlight
             let preview_avail = (avail_width as usize).saturating_sub(reserved);
             let preview_display_width = preview.width();
             let truncated_preview: String = if preview_display_width <= preview_avail {

@@ -52,6 +52,10 @@ On first launch the client walks you through registration:
 
 Credentials are stored in `~/.sqwok/identity/`
 
+## Keyboard navigation
+
+Mac users may need to configure your terminal to treat `option` key as `Alt`
+
 ## Why sqwok?
 
 There are tons of online chat apps out there. sqwok makes some unique design choices in an attempt to distinguish itself:
@@ -65,7 +69,7 @@ Also, it's a shell terminal app. Points for nerdiness.
 
 ## Account Recovery
 
-If you lose your device (or remove `~/.sqwok/identity/`) and need to re-register, run `sqwok` and choose "Recover existing account" at the prompt. The server issues a new cert with your original UUID and disconnects any old sessions.
+If you lose your device (or remove `~/.sqwok/identity/`) and need to re-register, run `sqwok` re-enter your same email at the prompt. The server issues a new cert with your original UUID and disconnects any old sessions.
 
 When you rejoin a chat, other online members will automatically sync you the message history they have and re-distribute encryption keys for your new device. How much history you recover depends on what your peers still have locally — messages that have fallen off every peer's device are gone for good.
 
@@ -105,3 +109,7 @@ Press `/` to open the command bar. Use it to switch chats, search users, manage 
 ## Invite Codes
 
 Generate an invite from the command bar or member list modal and share it out-of-band. Codes have a TTL (1h / 24h / 7d) and optional single-use enforcement.
+
+## Acknowledgements
+
+The code was written by Claude, the product design is mine.

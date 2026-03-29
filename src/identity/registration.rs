@@ -16,7 +16,7 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
     }
 
     let email: String = dialoguer::Input::new()
-        .with_prompt("Enter your email address to register or recover your account")
+        .with_prompt("Enter your email address to create or recover your account")
         .validate_with(|s: &String| -> Result<(), &str> {
             if s.contains('@') && s.len() <= 254 {
                 Ok(())
