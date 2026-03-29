@@ -130,7 +130,7 @@ fn handle_chat(app: &mut AppState, event: CtEvent) -> Action {
                 Action::Continue
             }
 
-            (KeyModifiers::SHIFT, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
+            (KeyModifiers::NONE, KeyCode::End) => {
                 app.jump_to_latest();
                 Action::Continue
             }
@@ -165,13 +165,6 @@ fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
             }
             KeyCode::Down => {
                 app.move_selection(1);
-                Action::Continue
-            }
-            // Allow jumping to the latest message while in editing mode so the
-            // user is never stuck when the input row has scrolled off-screen.
-            KeyCode::Char('G') if key.modifiers == KeyModifiers::SHIFT => {
-                app.active_pane_mut().editing = None;
-                app.jump_to_latest();
                 Action::Continue
             }
             KeyCode::End => {

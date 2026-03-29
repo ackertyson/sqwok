@@ -98,7 +98,7 @@ Encryption keys are the one exception: when a group's keys rotate while someone 
 | `/` | Open command bar |
 | `Tab` | Cycle command bar suggestions |
 | `Esc` | Dismiss command bar or modal |
-| `Shift+G` / `End` | Jump to latest messages |
+| `End` | Jump to latest messages |
 
 Max thread depth is 2 (message → reply → sub-reply).
 
