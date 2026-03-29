@@ -95,11 +95,6 @@ pub fn draw(frame: &mut Frame, app: &mut AppState) {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(desc.clone(), Style::default().fg(s::dim())));
             }
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled(
-                format!("{} members", chat.member_count),
-                Style::default().fg(s::dim()),
-            ));
             ListItem::new(Line::from(spans))
         })
         .collect();

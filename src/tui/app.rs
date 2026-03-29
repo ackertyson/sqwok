@@ -34,7 +34,6 @@ pub struct ChatSummary {
     pub uuid: String,
     pub topic: String,
     pub description: Option<String>,
-    pub member_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1529,7 +1528,6 @@ impl AppState {
                 uuid: inv.chat_uuid.clone(),
                 topic: inv.topic,
                 description: None,
-                member_count: 0,
             });
             self.join_chat(inv.chat_uuid);
         }

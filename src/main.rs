@@ -277,13 +277,11 @@ async fn fetch_chat_list(
         let uuid = item["uuid"].as_str().unwrap_or("").to_string();
         let topic = item["topic"].as_str().unwrap_or("untitled").to_string();
         let description = item["description"].as_str().map(|s| s.to_string());
-        let member_count = item["member_count"].as_u64().unwrap_or(0) as usize;
         if !uuid.is_empty() {
             chats.push(ChatSummary {
                 uuid,
                 topic,
                 description,
-                member_count,
             });
         }
     }
@@ -322,7 +320,6 @@ async fn create_chat(
         uuid,
         topic,
         description,
-        member_count: 1,
     })
 }
 

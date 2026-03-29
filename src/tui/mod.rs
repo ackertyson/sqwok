@@ -187,7 +187,6 @@ pub async fn run(
                             topic
                         },
                         description: None,
-                        member_count: 0,
                     });
                 }
                 // Auto-join immediately — no need to "select from list"
