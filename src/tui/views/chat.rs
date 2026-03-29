@@ -267,7 +267,7 @@ fn row_visual_height(row: &RenderRow, width: u16) -> u16 {
         if !is_active || width == 0 {
             return 1;
         }
-        let prefix_len = indent_width(*indent) + 2; // "> "
+        let prefix_len = indent_width(*indent) + 2;
         let avail = (width as usize).saturating_sub(prefix_len).max(1);
         // Include cursor char in wrap calculation at the correct position
         let cursor_content = insert_cursor_marker(content, *cursor);
@@ -678,7 +678,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             if !is_active {
                 let mut spans = vec![
                     Span::styled(indent_str, Style::default().fg(s::dim())),
-                    Span::styled("> ", Style::default().fg(prompt_color)),
+                    Span::styled("❯ ", Style::default().fg(prompt_color)),
                 ];
                 if thread_uuid.is_some() {
                     spans.push(Span::styled("reply...", Style::default().fg(s::dim())));
@@ -690,7 +690,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                     area,
                 );
             } else {
-                let prefix_len = indent_str.chars().count() + 2; // "> "
+                let prefix_len = indent_str.chars().count() + 2;
                 let avail = (avail_width as usize).saturating_sub(prefix_len).max(1);
                 let padding = " ".repeat(prefix_len);
 
@@ -706,7 +706,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                     let mut spans: Vec<Span> = if is_first {
                         vec![
                             Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
-                            Span::styled("> ", Style::default().fg(prompt_color)),
+                            Span::styled("❯ ", Style::default().fg(prompt_color)),
                         ]
                     } else {
                         vec![Span::raw(padding.clone())]
