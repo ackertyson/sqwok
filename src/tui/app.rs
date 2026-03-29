@@ -1331,8 +1331,10 @@ impl AppState {
                     m["screenname"].as_str().unwrap_or("?").to_string()
                 };
                 self.name_cache.insert(uuid_str.clone(), screenname.clone());
-                if let (Ok(uuid), Some(ref cs)) = (uuid_str.parse::<Uuid>(), &self.contact_store) {
-                    let _ = cs.upsert(uuid, &screenname, chat_uuid);
+                if uuid_str != self.my_uuid {
+                    if let (Ok(uuid), Some(ref cs)) = (uuid_str.parse::<Uuid>(), &self.contact_store) {
+                        let _ = cs.upsert(uuid, &screenname, chat_uuid);
+                    }
                 }
                 self.members.push(Member {
                     uuid: uuid_str,

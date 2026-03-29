@@ -386,7 +386,10 @@ fn execute_command(app: &mut AppState, action: CommandAction) -> Action {
                 .contact_store
                 .as_ref()
                 .and_then(|cs| cs.all(100).ok())
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|c| c.uuid.to_string() != app.my_uuid)
+                .collect();
             let mut modal = ContactsModalState::new(contacts);
             modal.chat_names = app
                 .chat_list

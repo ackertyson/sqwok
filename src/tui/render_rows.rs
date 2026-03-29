@@ -77,14 +77,10 @@ pub fn build(
     let mut rows = Vec::new();
 
     let display_name = |sender_uuid: &str, fallback: &str| -> String {
-        if sender_uuid == my_uuid {
-            "me".to_string()
-        } else {
-            name_cache
-                .get(sender_uuid)
-                .cloned()
-                .unwrap_or_else(|| fallback.to_string())
-        }
+        name_cache
+            .get(sender_uuid)
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
     };
 
     let author_color = |sender_uuid: &str| -> ratatui::style::Color {

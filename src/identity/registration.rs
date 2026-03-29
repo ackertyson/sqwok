@@ -63,6 +63,7 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
 
     std::fs::create_dir_all(identity_dir)?;
     std::fs::write(&pending_path, &request_uuid)?;
+    std::fs::write(identity_dir.join("pending_screenname"), &screenname)?;
 
     println!(
         "Check your email at {} and click the verification link.",
@@ -79,6 +80,7 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
         identity_dir,
         &request_uuid,
         csr_code.as_deref(),
+        &screenname,
         &pending_path,
     )
     .await
@@ -90,6 +92,10 @@ async fn resume_from_polling(
     request_uuid: &str,
 ) -> Result<()> {
     let pending_path = identity_dir.join("pending_request");
+    let screenname = std::fs::read_to_string(identity_dir.join("pending_screenname"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
 
     let client = reqwest::Client::new();
     let url = format!("{}/api/verify/{}", server_url, request_uuid);
@@ -104,6 +110,7 @@ async fn resume_from_polling(
                 identity_dir,
                 request_uuid,
                 csr_code.as_deref(),
+                &screenname,
                 &pending_path,
             )
             .await
@@ -120,6 +127,7 @@ async fn resume_from_polling(
                 identity_dir,
                 request_uuid,
                 csr_code.as_deref(),
+                &screenname,
                 &pending_path,
             )
             .await
@@ -159,6 +167,7 @@ async fn complete_registration(
     identity_dir: &Path,
     request_uuid: &str,
     csr_code: Option<&str>,
+    screenname: &str,
     pending_path: &Path,
 ) -> Result<()> {
     let (key_pem, csr_pem) = generate_keypair_and_csr()?;
@@ -220,7 +229,9 @@ async fn complete_registration(
         );
     }
 
+    std::fs::write(identity_dir.join("screenname"), screenname)?;
     std::fs::remove_file(pending_path).ok();
+    std::fs::remove_file(identity_dir.join("pending_screenname")).ok();
 
     println!("\nSetup complete! Identity saved to {:?}", identity_dir);
     println!("User UUID: {}", user_uuid);
