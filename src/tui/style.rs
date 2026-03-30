@@ -130,6 +130,34 @@ pub fn unread_bg() -> Color {
     color((45, 32, 0), 237)
 }
 #[inline]
+pub fn unread_trail_bg() -> Color {
+    color((190, 145, 0), 178)
+}
+
+/// Interpolated color for the fade zone at the leading edge of the unread
+/// trail bar. Blends from `unread_bg` (text area) into `unread_trail_bg`
+/// (the vivid gold bar). `step` 0 is closest to the text.
+pub fn unread_bg_fade(step: u16, total_steps: u16) -> Color {
+    let t = (step + 1) as f32 / (total_steps + 1) as f32;
+    if is_truecolor() {
+        let (r0, g0, b0) = (45u8, 32u8, 0u8);   // unread_bg
+        let (r1, g1, b1) = (190u8, 145u8, 0u8);  // unread_trail_bg
+        Color::Rgb(
+            (r0 as f32 + (r1 - r0) as f32 * t) as u8,
+            (g0 as f32 + (g1 - g0) as f32 * t) as u8,
+            (b0 as f32 + (b1 - b0) as f32 * t) as u8,
+        )
+    } else {
+        // Step through dark-olive → warm-amber → golden → light-gold.
+        match step {
+            0 => Color::Indexed(58),  // #5f5f00 dark olive
+            1 => Color::Indexed(94),  // #875f00 warm amber
+            2 => Color::Indexed(136), // #af8700 golden
+            _ => Color::Indexed(178), // #d7af00 light gold
+        }
+    }
+}
+#[inline]
 pub fn error_color() -> Color {
     color((220, 80, 80), 167)
 }

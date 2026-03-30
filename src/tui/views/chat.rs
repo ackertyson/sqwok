@@ -416,6 +416,15 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
         s::BG
     };
 
+    // Pre-extract unread flag (with highlight priority) for use after the match.
+    let row_is_unread = match row {
+        RenderRow::Message { is_unread, highlight_age, .. } => {
+            *is_unread && !highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false)
+        }
+        RenderRow::CollapsedThread { is_unread, .. } => *is_unread,
+        _ => false,
+    };
+
     match row {
         RenderRow::TypingIndicator { indent } => {
             let indent_str = build_indent(*indent);
@@ -453,6 +462,9 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             } else {
                 s::BG
             };
+            let show_unread_trail = *is_unread
+                && !is_selected
+                && !highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false);
 
             let indent_str = build_indent(*indent);
             let name_style = Style::default()
@@ -548,10 +560,10 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                         Span::styled(line_text, body_style),
                     ])
                 };
-                // For selected rows: explicitly set bg on every text span so they keep
-                // actual_bg; the paragraph's bg (trail_bg) then fills the empty trailing
-                // space at the right — creating a bold color flash past the text.
-                let line = if is_selected {
+                // For rows with a trail (selected or unread): pin bg on every text
+                // span so the text area keeps actual_bg while the paragraph's bg
+                // (para_bg) fills the empty trailing space with the vivid color.
+                let line = if is_selected || show_unread_trail {
                     let spans = line
                         .spans
                         .into_iter()
@@ -566,6 +578,8 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
 
             let para_bg = if is_selected {
                 s::selection_trail_bg()
+            } else if show_unread_trail {
+                s::unread_trail_bg()
             } else {
                 actual_bg
             };
@@ -591,6 +605,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             } else {
                 s::BG
             };
+            let show_unread_trail = *is_unread && !is_selected;
             let author_color = *author_color;
             let replies_tag = format!("[{} replies]", reply_count);
             // Compute how many columns are reserved for non-preview content so we
@@ -647,7 +662,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 timestamp.clone(),
                 Style::default().fg(s::dim()),
             ));
-            let line = if is_selected {
+            let line = if is_selected || show_unread_trail {
                 let spans = spans
                     .into_iter()
                     .map(|s| Span::styled(s.content, s.style.bg(actual_bg)))
@@ -658,6 +673,8 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             };
             let para_bg = if is_selected {
                 s::selection_trail_bg()
+            } else if show_unread_trail {
+                s::unread_trail_bg()
             } else {
                 actual_bg
             };
@@ -738,27 +755,27 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
     }
     if is_selected {
         apply_selection_fade(frame, area);
+    } else if row_is_unread {
+        apply_unread_fade(frame, area);
     }
 }
 
-/// Softens the leading edge of the selection trail bar. After the paragraph
-/// is rendered, each row has text spans (bg = selection_bg) followed by empty
-/// cells (bg = selection_trail_bg). This function finds where the trail starts
-/// on each row and blends the first few cells from selection_bg into
-/// selection_trail_bg so the vivid purple eases in rather than cutting in hard.
+/// Generic trail-fade helper. After a paragraph is rendered with text spans
+/// pinned to one bg and the paragraph bg set to `trail_bg`, this scans each
+/// row right-to-left to find where the trailing `trail_bg` block begins, then
+/// blends the first `fade_steps` cells using `fade_fn`.
 ///
-/// Wide characters (e.g. emoji) leave their continuation cell with trail_bg
-/// because ratatui's Paragraph pre-fills the area with the paragraph bg and
-/// then skips the continuation cell. To avoid triggering the fade on those
-/// spurious mid-text trail_bg cells, we scan right-to-left and find where the
-/// trailing trail_bg block actually begins.
-fn apply_selection_fade(frame: &mut Frame, area: Rect) {
-    let fade_steps = s::selection_fade_steps();
-    let trail_bg = s::selection_trail_bg();
-
-    // Collect trail start x per row (immutable scan first, then mutate).
-    // Scan right-to-left: find the rightmost cell that is NOT trail_bg; the
-    // trail begins at the cell after it.
+/// Wide characters leave a continuation cell pre-filled with the paragraph bg;
+/// the right-to-left scan ensures we only touch the true trailing block.
+fn apply_trail_fade<F>(
+    frame: &mut Frame,
+    area: Rect,
+    trail_bg: ratatui::style::Color,
+    fade_steps: u16,
+    fade_fn: F,
+) where
+    F: Fn(u16, u16) -> ratatui::style::Color,
+{
     let trail_xs: Vec<Option<u16>> = (area.y..area.y + area.height)
         .map(|y| {
             let last_text_x = (area.x..area.x + area.width).rev().find(|&x| {
@@ -781,10 +798,30 @@ fn apply_selection_fade(frame: &mut Frame, area: Rect) {
         let steps = fade_steps.min(available);
         for step in 0..steps {
             if let Some(cell) = frame.buffer_mut().cell_mut(Position { x: tx + step, y }) {
-                cell.set_bg(s::selection_bg_fade(step, fade_steps));
+                cell.set_bg(fade_fn(step, fade_steps));
             }
         }
     }
+}
+
+fn apply_selection_fade(frame: &mut Frame, area: Rect) {
+    apply_trail_fade(
+        frame,
+        area,
+        s::selection_trail_bg(),
+        s::selection_fade_steps(),
+        s::selection_bg_fade,
+    );
+}
+
+fn apply_unread_fade(frame: &mut Frame, area: Rect) {
+    apply_trail_fade(
+        frame,
+        area,
+        s::unread_trail_bg(),
+        s::selection_fade_steps(),
+        s::unread_bg_fade,
+    );
 }
 
 fn indent_width(indent: u8) -> usize {
