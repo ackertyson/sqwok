@@ -52,6 +52,8 @@ On first launch the client walks you through registration:
 
 Credentials are stored in `~/.sqwok/identity/`
 
+*NOTE: You are encouraged to configure your OS to use a time server--clock drift is a common source of key generation failure.*
+
 ## Keyboard navigation
 
 Mac users may need to configure your terminal to treat `option` key as `Alt`

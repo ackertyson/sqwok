@@ -420,6 +420,19 @@ impl AppState {
                 None
             }
         });
+        // Depth-2 message: right arrow acts like Enter (focus the depth-2 reply input).
+        let start_reply = rows.get(selected).and_then(|r| {
+            if let RenderRow::Message {
+                thread_uuid: Some(root),
+                reply_to_uuid: Some(parent),
+                ..
+            } = r
+            {
+                Some((parent.clone(), root.clone()))
+            } else {
+                None
+            }
+        });
         drop(rows);
 
         if let Some(uuid) = expand_top {
@@ -432,9 +445,16 @@ impl AppState {
             // No thread yet (or thread already expanded): expand and focus the thread input.
             self.panes[self.active_pane].expanded.insert(uuid.clone());
             self.panes[self.active_pane].editing = Some(InputTarget::Thread(uuid));
+            self.scroll_to_input();
+        } else if let Some((parent, root)) = start_reply {
+            // Depth-2: mirror Enter behavior — focus the depth-2 reply input.
+            self.panes[self.active_pane].expanded.insert(root.clone());
+            self.panes[self.active_pane].editing = Some(InputTarget::Reply(parent, root));
+            self.scroll_to_input();
         } else {
             // Depth-1 message with expanded subthread: initiate a depth-2 reply.
             self.reply_to_selected();
+            self.scroll_to_input();
         }
     }
 
@@ -506,10 +526,11 @@ impl AppState {
     pub fn activate(&mut self) {
         let rows = self.build_render_rows();
         let selected = self.panes[self.active_pane].selected;
-        match rows.get(selected) {
+        let changed = match rows.get(selected) {
             Some(RenderRow::CollapsedThread { .. }) => {
                 // Depth-0: stay at depth-0, focus the main chat input.
                 self.panes[self.active_pane].editing = Some(InputTarget::MainChat);
+                true
             }
             Some(RenderRow::Message {
                 uuid,
@@ -527,15 +548,17 @@ impl AppState {
                         self.panes[self.active_pane].expanded.insert(root.clone());
                         self.panes[self.active_pane].editing =
                             Some(InputTarget::Reply(parent, root));
-                        return;
+                    } else {
+                        // Depth-1 message: focus the thread input at the bottom.
+                        self.panes[self.active_pane].editing =
+                            Some(InputTarget::Thread(root.clone()));
                     }
-                    // Depth-1 message: focus the thread input at the bottom.
-                    self.panes[self.active_pane].editing = Some(InputTarget::Thread(root.clone()));
-                    return;
+                } else {
+                    // Depth-0 message: focus the main chat input.
+                    let _ = uuid;
+                    self.panes[self.active_pane].editing = Some(InputTarget::MainChat);
                 }
-                // Depth-0 message: focus the main chat input.
-                let _ = uuid;
-                self.panes[self.active_pane].editing = Some(InputTarget::MainChat);
+                true
             }
             Some(RenderRow::Input {
                 thread_uuid,
@@ -550,8 +573,45 @@ impl AppState {
                     _ => InputTarget::MainChat,
                 };
                 self.panes[self.active_pane].editing = Some(target);
+                true
             }
-            Some(RenderRow::TypingIndicator { .. }) | None => {}
+            Some(RenderRow::TypingIndicator { .. }) | None => false,
+        };
+        if changed {
+            self.scroll_to_input();
+        }
+    }
+
+    /// Scroll the viewport so the input row matching the current editing target is visible.
+    fn scroll_to_input(&mut self) {
+        let editing = match self.panes[self.active_pane].editing.clone() {
+            Some(e) => e,
+            None => return,
+        };
+        let rows = self.build_render_rows();
+        let target_idx = rows.iter().position(|r| {
+            if let RenderRow::Input {
+                thread_uuid,
+                reply_to_uuid,
+                ..
+            } = r
+            {
+                match &editing {
+                    InputTarget::MainChat => thread_uuid.is_none() && reply_to_uuid.is_none(),
+                    InputTarget::Thread(root) => {
+                        thread_uuid.as_deref() == Some(root.as_str()) && reply_to_uuid.is_none()
+                    }
+                    InputTarget::Reply(reply_uuid, thread) => {
+                        thread_uuid.as_deref() == Some(thread.as_str())
+                            && reply_to_uuid.as_deref() == Some(reply_uuid.as_str())
+                    }
+                }
+            } else {
+                false
+            }
+        });
+        if let Some(idx) = target_idx {
+            self.panes[self.active_pane].selected = idx;
         }
     }
 
