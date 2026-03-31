@@ -19,8 +19,11 @@ COPY --from=builder /usr/local/cargo/bin/sqwok /usr/local/bin/sqwok
 # Create a non-root user/group for running the application.
 RUN groupadd -r sqwok && useradd -r -g sqwok sqwok
 
-# Pre-create volume directories and set ownership before the volume mounts replace them.
-RUN mkdir -p /home/sqwok/.sqwok /home/sqwok/.local/share/sqwok \
+# set TZ to sensible non-UTC
+RUN ln -fs /usr/share/zoneinfo/America/Chicago /etc/localtime
+
+# Pre-create volume directories and set ownership to retain non-root perms at runtime
+RUN mkdir -p /home/sqwok/.sqwok \
     && chown -R sqwok:sqwok /home/sqwok
 
 USER sqwok

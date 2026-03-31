@@ -3,11 +3,10 @@ services:
         image: local/sqwok:latest
         build: .
         environment:
-            SQWOK_SERVER: https://sqwok.fixbase.io # http://host.docker.internal:4000
+            COLORTERM: truecolor # remove this if your host terminal does not support 24-bit color
+            SQWOK_SERVER: https://sqwok.fixbase.io
         volumes:
             - sqwok-data:/home/sqwok/.sqwok
-            - sqwok-identity:/home/sqwok/.local/share/sqwok
 
 volumes:
     sqwok-data:
-    sqwok-identity:
