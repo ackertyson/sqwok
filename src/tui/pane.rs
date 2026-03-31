@@ -116,6 +116,50 @@ impl Pane {
         }
     }
 
+    /// Insert `text` at the current cursor position and advance the cursor.
+    pub fn insert_str_at_cursor(&mut self, text: &str) {
+        if let Some(target) = self.editing.clone() {
+            let s = self.inputs.entry(target.clone()).or_default();
+            let cursor = self
+                .cursor_positions
+                .entry(target)
+                .or_insert(s.chars().count());
+            let byte_idx = s
+                .char_indices()
+                .nth(*cursor)
+                .map(|(i, _)| i)
+                .unwrap_or(s.len());
+            s.insert_str(byte_idx, text);
+            *cursor += text.chars().count();
+        }
+    }
+
+    /// Delete from the cursor backwards to (and including) the nearest `@`
+    /// character. Returns `(at_char_index, deleted_query)` on success, or
+    /// `None` if no `@` is found between the start and cursor.
+    pub fn delete_back_to_at(&mut self) -> Option<(usize, String)> {
+        let target = self.editing.clone()?;
+        let s = self.inputs.get_mut(&target)?;
+        let cursor = *self
+            .cursor_positions
+            .get(&target)
+            .unwrap_or(&s.chars().count());
+        let chars: Vec<char> = s.chars().collect();
+        // Find the rightmost `@` before the cursor.
+        let at_pos = chars[..cursor].iter().rposition(|&c| c == '@')?;
+        let query: String = chars[at_pos + 1..cursor].iter().collect();
+
+        // Compute byte range [byte_start, byte_end) for `@query`.
+        let byte_start: usize = chars[..at_pos].iter().map(|c| c.len_utf8()).sum();
+        let byte_end: usize = chars[..cursor].iter().map(|c| c.len_utf8()).sum();
+        s.drain(byte_start..byte_end);
+
+        if let Some(pos) = self.cursor_positions.get_mut(&target) {
+            *pos = at_pos;
+        }
+        Some((at_pos, query))
+    }
+
     pub fn take_input(&mut self) -> Option<String> {
         let target = self.editing.take()?;
         self.cursor_positions.remove(&target);

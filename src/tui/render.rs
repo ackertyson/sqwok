@@ -45,7 +45,7 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
 
     if app.panes.len() == 1 {
         let pane_snap = app.panes[0].clone();
-        views::chat::draw_messages(frame, pane_area, app, &pane_snap);
+        views::chat::draw_messages(frame, pane_area, app, &pane_snap, true);
     } else {
         let pane_count = app.panes.len();
         let active_pane_idx = app.active_pane;
@@ -77,7 +77,7 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
                 .border_style(border_style);
             let inner = block.inner(chunk);
             frame.render_widget(block, chunk);
-            views::chat::draw_messages(frame, inner, app, pane_snap);
+            views::chat::draw_messages(frame, inner, app, pane_snap, i == active_pane_idx);
         }
     }
 

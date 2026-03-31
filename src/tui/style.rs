@@ -140,8 +140,8 @@ pub fn unread_trail_bg() -> Color {
 pub fn unread_bg_fade(step: u16, total_steps: u16) -> Color {
     let t = (step + 1) as f32 / (total_steps + 1) as f32;
     if is_truecolor() {
-        let (r0, g0, b0) = (45u8, 32u8, 0u8);   // unread_bg
-        let (r1, g1, b1) = (190u8, 145u8, 0u8);  // unread_trail_bg
+        let (r0, g0, b0) = (45u8, 32u8, 0u8); // unread_bg
+        let (r1, g1, b1) = (190u8, 145u8, 0u8); // unread_trail_bg
         Color::Rgb(
             (r0 as f32 + (r1 - r0) as f32 * t) as u8,
             (g0 as f32 + (g1 - g0) as f32 * t) as u8,
@@ -157,6 +157,51 @@ pub fn unread_bg_fade(step: u16, total_steps: u16) -> Color {
         }
     }
 }
+/// Dark teal background for messages that mention the current user (unread).
+#[inline]
+pub fn mention_bg() -> Color {
+    // 256-color: Indexed(17) = #00005f (dark navy) — clearly different from black
+    color((0, 38, 45), 17)
+}
+/// Vivid cyan bar at the right edge for mention-unread rows.
+#[inline]
+pub fn mention_trail_bg() -> Color {
+    color((0, 175, 200), 37)
+}
+
+/// Interpolated color for the fade zone of the mention trail bar.
+/// Blends from `mention_bg` into `mention_trail_bg`. `step` 0 is closest to text.
+pub fn mention_bg_fade(step: u16, total_steps: u16) -> Color {
+    let t = (step + 1) as f32 / (total_steps + 1) as f32;
+    if is_truecolor() {
+        let (r0, g0, b0) = (0u8, 38u8, 45u8); // mention_bg
+        let (r1, g1, b1) = (0u8, 175u8, 200u8); // mention_trail_bg
+        Color::Rgb(
+            (r0 as f32 + (r1 - r0) as f32 * t) as u8,
+            (g0 as f32 + (g1 - g0) as f32 * t) as u8,
+            (b0 as f32 + (b1 - b0) as f32 * t) as u8,
+        )
+    } else {
+        match step {
+            0 => Color::Indexed(17), // dark navy
+            1 => Color::Indexed(30), // teal
+            2 => Color::Indexed(37), // vivid teal
+            _ => Color::Indexed(44), // cyan
+        }
+    }
+}
+
+/// Subtle background tint applied to `@name` spans inside any message body.
+#[inline]
+pub fn mention_inline_bg() -> Color {
+    color((0, 65, 80), 24) // dark azure-teal
+}
+/// Foreground for `@name` spans — bright cyan so they pop against the tint.
+#[inline]
+pub fn mention_inline_fg() -> Color {
+    color((0, 200, 230), 44) // vivid cyan
+}
+
 #[inline]
 pub fn error_color() -> Color {
     color((220, 80, 80), 167)

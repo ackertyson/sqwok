@@ -157,6 +157,28 @@ pub enum ConnStatus {
     Disconnected { reason: String, since: Instant },
 }
 
+/// State for the `@mention` autocomplete popup.
+#[derive(Debug)]
+pub struct MentionState {
+    /// What the user has typed after the `@` trigger.
+    pub query: String,
+    /// Members whose screenname starts with `query` (uuid, screenname).
+    pub matches: Vec<(String, String)>,
+    /// Index of the currently highlighted entry.
+    pub selected: usize,
+}
+
+/// A mention that has been committed to an input buffer, tracking where
+/// `@screenname` lives so we can substitute the wire tag on send.
+#[derive(Debug, Clone)]
+pub struct PendingMention {
+    pub target: InputTarget,
+    /// Char-index of the `@` in the input buffer at the time of insertion.
+    pub at_char: usize,
+    pub uuid: String,
+    pub screenname: String,
+}
+
 /// How multiple panes are laid out on screen.
 #[derive(Clone, Copy)]
 pub enum PaneSplit {
@@ -219,6 +241,10 @@ pub struct AppState {
     pub scrollback_pending: bool,
     /// Rate-limit: last time a scrollback sync was requested
     pub last_scrollback_request: Option<Instant>,
+    /// Active `@mention` autocomplete popup, if any.
+    pub mention_popup: Option<MentionState>,
+    /// Pending mentions committed to input buffers, consumed on send.
+    pub pending_mentions: Vec<PendingMention>,
 }
 
 impl AppState {
@@ -265,6 +291,8 @@ impl AppState {
             last_typing_target: None,
             typing_indicators: HashSet::new(),
             typing_indicators_updated: None,
+            mention_popup: None,
+            pending_mentions: Vec::new(),
         }
     }
 
@@ -274,6 +302,115 @@ impl AppState {
 
     pub fn active_pane_mut(&mut self) -> &mut Pane {
         &mut self.panes[self.active_pane]
+    }
+
+    /// Open the `@mention` autocomplete popup with all non-self members.
+    pub fn open_mention_popup(&mut self) {
+        let matches = self
+            .members
+            .iter()
+            .filter(|m| m.uuid != self.my_uuid)
+            .map(|m| (m.uuid.clone(), m.screenname.clone()))
+            .collect();
+        self.mention_popup = Some(MentionState {
+            query: String::new(),
+            matches,
+            selected: 0,
+        });
+    }
+
+    /// Filter the popup matches to members whose screenname starts with `query`.
+    pub fn update_mention_query(&mut self, query: &str) {
+        if let Some(ref mut popup) = self.mention_popup {
+            popup.query = query.to_string();
+            let q = query.to_lowercase();
+            popup.matches = self
+                .members
+                .iter()
+                .filter(|m| m.uuid != self.my_uuid && m.screenname.to_lowercase().starts_with(&q))
+                .map(|m| (m.uuid.clone(), m.screenname.clone()))
+                .collect();
+            popup.selected = 0;
+        }
+    }
+
+    /// Complete the selected mention: replace `@query` in the input with
+    /// `@screenname ` and record a `PendingMention` for wire-format substitution
+    /// on send.
+    pub fn complete_mention(&mut self) {
+        let popup = match self.mention_popup.take() {
+            Some(p) => p,
+            None => return,
+        };
+        let (uuid, screenname) = match popup.matches.get(popup.selected) {
+            Some(m) => m.clone(),
+            None => return,
+        };
+
+        // Delete `@query` back to (and including) the triggering `@`.
+        let at_char = match self.active_pane_mut().delete_back_to_at() {
+            Some((pos, _)) => pos,
+            None => return,
+        };
+
+        // Insert the display form `@screenname ` at that position.
+        let insertion = format!("@{} ", screenname);
+        self.active_pane_mut().insert_str_at_cursor(&insertion);
+
+        // Record the pending mention for wire-format substitution on send.
+        let target = match self.active_pane().editing.clone() {
+            Some(t) => t,
+            None => return,
+        };
+        self.pending_mentions.push(PendingMention {
+            target,
+            at_char,
+            uuid,
+            screenname,
+        });
+    }
+
+    /// Apply pending mentions for `target` to `text`, replacing `@screenname`
+    /// spans with `<@uuid>screenname</@>` wire-format tags. Consumed mentions
+    /// are removed from `self.pending_mentions`.
+    fn apply_pending_mentions(&mut self, mut text: String, target: &InputTarget) -> String {
+        // Partition: collect matching mentions, keep others in place.
+        let mut remaining = Vec::new();
+        let mut mentions = Vec::new();
+        for pm in self.pending_mentions.drain(..) {
+            if &pm.target == target {
+                mentions.push(pm);
+            } else {
+                remaining.push(pm);
+            }
+        }
+        self.pending_mentions = remaining;
+
+        // Sort descending by position so earlier replacements don't shift later ones.
+        mentions.sort_by(|a, b| b.at_char.cmp(&a.at_char));
+
+        for pm in &mentions {
+            let expected = format!("@{}", pm.screenname);
+            let expected_len = expected.chars().count();
+            let chars: Vec<char> = text.chars().collect();
+            if pm.at_char + expected_len > chars.len() {
+                continue;
+            }
+            let slice: String = chars[pm.at_char..pm.at_char + expected_len]
+                .iter()
+                .collect();
+            if slice != expected {
+                continue;
+            }
+            let byte_start: usize = chars[..pm.at_char].iter().map(|c| c.len_utf8()).sum();
+            let byte_end: usize = chars[..pm.at_char + expected_len]
+                .iter()
+                .map(|c| c.len_utf8())
+                .sum();
+            let tag = format!("<@{}>{}</@>", pm.uuid, pm.screenname);
+            text.replace_range(byte_start..byte_end, &tag);
+        }
+        text
     }
 
     fn show_toast(&mut self, msg: impl Into<String>, secs: u64) {
@@ -731,10 +868,15 @@ impl AppState {
         let editing_target = self.active_pane().editing.clone();
 
         let pane = self.active_pane_mut();
-        let text = match pane.take_input() {
+        let display_text = match pane.take_input() {
             Some(t) => t,
             None => return,
         };
+
+        // Close any open mention popup and substitute wire-format tags.
+        self.mention_popup = None;
+        let target_for_mentions = editing_target.clone().unwrap_or(InputTarget::MainChat);
+        let wire_text = self.apply_pending_mentions(display_text, &target_for_mentions);
 
         let (thread_uuid, reply_to_uuid): (Option<String>, Option<String>) = match &editing_target {
             Some(InputTarget::Thread(root)) => (Some(root.clone()), None),
@@ -752,7 +894,7 @@ impl AppState {
         let thread_ref = thread_uuid.as_deref();
         let reply_ref = reply_to_uuid.as_deref();
 
-        match chat.send_message(&text, thread_ref, reply_ref) {
+        match chat.send_message(&wire_text, thread_ref, reply_ref) {
             Ok(frame) => {
                 // Extract UUID and timestamp for optimistic display
                 let msg_uuid = frame.payload["uuid"].as_str().unwrap_or("").to_string();
@@ -760,19 +902,24 @@ impl AppState {
 
                 let _ = self.ws_tx.send(frame.encode());
 
-                // Optimistically display the sent message immediately
+                // Optimistically display the sent message immediately (render tags → @name).
+                let mentioned_names_opt =
+                    super::mention::extract_mentioned_names(&wire_text, &self.name_cache);
+                let display_body = super::mention::render_body(&wire_text, &self.name_cache);
                 if !msg_uuid.is_empty() {
                     let msg = DisplayMessage {
                         uuid: msg_uuid.clone(),
                         sender_uuid: self.my_uuid.clone(),
                         sender_name: self.my_screenname.clone(),
-                        body: text,
+                        body: display_body,
                         timestamp: ts,
                         global_seq: i64::MAX, // sort to end until server assigns real seq
                         thread_uuid: thread_uuid.clone(),
                         reply_to_uuid: reply_to_uuid.clone(),
                         pending: true,
                         read: true,
+                        mentions_me: false, // own messages are never self-mentions
+                        mentioned_names: mentioned_names_opt,
                     };
                     self.highlights.insert(msg_uuid, Instant::now());
                     self.msg_store.insert(msg);
@@ -959,9 +1106,14 @@ impl AppState {
         }
 
         // Update in-memory display messages by UUID (not by sender).
+        let my_uuid = self.my_uuid.clone();
+        let name_cache = self.name_cache.clone();
         for (uuid, plaintext) in decrypted_by_uuid {
             if let Some(msg) = self.msg_store.by_uuid.get_mut(&uuid) {
-                msg.body = plaintext;
+                msg.mentions_me = super::mention::mentions_user(&plaintext, &my_uuid);
+                msg.mentioned_names =
+                    super::mention::extract_mentioned_names(&plaintext, &name_cache);
+                msg.body = super::mention::render_body(&plaintext, &name_cache);
             }
         }
     }
@@ -990,7 +1142,7 @@ impl AppState {
             .unwrap_or("")
             .to_string();
 
-        let body = if let Some(ref ch) = self.chat_channel {
+        let raw_body = if let Some(ref ch) = self.chat_channel {
             if let Some(ref crypto) = ch.crypto {
                 if let Ok(sender_id) = Uuid::parse_str(&sender_uuid) {
                     let ciphertext = payload["ciphertext"].as_str().unwrap_or("");
@@ -1006,6 +1158,10 @@ impl AppState {
         } else {
             "<no channel>".to_string()
         };
+
+        let mentions_me = super::mention::mentions_user(&raw_body, &self.my_uuid);
+        let mentioned_names = super::mention::extract_mentioned_names(&raw_body, &self.name_cache);
+        let body = super::mention::render_body(&raw_body, &self.name_cache);
 
         let sender_name = self
             .name_cache
@@ -1029,6 +1185,8 @@ impl AppState {
             reply_to_uuid,
             pending: false,
             read,
+            mentions_me,
+            mentioned_names,
         }
     }
 

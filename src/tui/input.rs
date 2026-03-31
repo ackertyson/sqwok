@@ -3,6 +3,22 @@ use crossterm::event::{Event as CtEvent, KeyCode, KeyModifiers};
 use super::app::{AppState, ContactsModalState, ModalState, Mode, SearchModalState};
 use super::views::command_bar::{CommandAction, CommandBarState};
 
+/// Extract the mention query currently being typed: the text between the last
+/// unmatched `@` before the cursor and the cursor itself.  Returns `None` when
+/// the cursor is not inside an `@…` sequence.
+fn current_mention_query(content: &str, cursor: usize) -> Option<&str> {
+    let chars: Vec<char> = content.chars().collect();
+    let at_pos = chars[..cursor].iter().rposition(|&c| c == '@')?;
+    // If there's a space between the @ and cursor the user has moved on.
+    if chars[at_pos + 1..cursor].contains(&' ') {
+        return None;
+    }
+    // Return the byte slice corresponding to the query characters.
+    let byte_at: usize = chars[..at_pos + 1].iter().map(|c| c.len_utf8()).sum();
+    let byte_cursor: usize = chars[..cursor].iter().map(|c| c.len_utf8()).sum();
+    Some(&content[byte_at..byte_cursor])
+}
+
 pub enum Action {
     Continue,
     Quit,
@@ -151,11 +167,45 @@ fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
     match event {
         CtEvent::Key(key) => match key.code {
             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => Action::Quit,
+
+            // --- Mention popup: navigate and complete ---
+            KeyCode::Up if app.mention_popup.is_some() => {
+                if let Some(ref mut popup) = app.mention_popup {
+                    if popup.selected > 0 {
+                        popup.selected -= 1;
+                    }
+                }
+                Action::Continue
+            }
+            KeyCode::Down if app.mention_popup.is_some() => {
+                if let Some(ref mut popup) = app.mention_popup {
+                    let max = popup.matches.len().saturating_sub(1);
+                    if popup.selected < max {
+                        popup.selected += 1;
+                    }
+                }
+                Action::Continue
+            }
+            KeyCode::Enter if app.mention_popup.is_some() => {
+                app.complete_mention();
+                Action::Continue
+            }
+            KeyCode::Tab if app.mention_popup.is_some() => {
+                app.complete_mention();
+                Action::Continue
+            }
+            KeyCode::Esc if app.mention_popup.is_some() => {
+                app.mention_popup = None;
+                Action::Continue
+            }
+
+            // --- Normal editing ---
             KeyCode::Enter => {
                 app.send_current_input();
                 Action::Continue
             }
             KeyCode::Esc => {
+                app.mention_popup = None;
                 app.active_pane_mut().editing = None;
                 Action::Continue
             }
@@ -168,6 +218,7 @@ fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
                 Action::Continue
             }
             KeyCode::End => {
+                app.mention_popup = None;
                 app.active_pane_mut().editing = None;
                 app.jump_to_latest();
                 Action::Continue
@@ -177,14 +228,80 @@ fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
             {
                 app.active_pane_mut().push_char(c);
                 app.maybe_send_typing_notify();
+
+                // Manage the mention popup.
+                if c == '@' {
+                    app.open_mention_popup();
+                } else if let Some(ref mut popup) = app.mention_popup {
+                    // Append to the query and re-filter.
+                    let mut q = popup.query.clone();
+                    q.push(c);
+                    let q_lower = q.to_lowercase();
+                    popup.query = q;
+                    popup.matches = app
+                        .members
+                        .iter()
+                        .filter(|m| {
+                            m.uuid != app.my_uuid
+                                && m.screenname.to_lowercase().starts_with(&q_lower)
+                        })
+                        .map(|m| (m.uuid.clone(), m.screenname.clone()))
+                        .collect();
+                    popup.selected = 0;
+                }
                 Action::Continue
             }
             KeyCode::Backspace => {
                 app.active_pane_mut().pop_char();
+
+                // Keep popup in sync: recompute query from buffer state.
+                if app.mention_popup.is_some() {
+                    let (content, cursor) = {
+                        let pane = app.active_pane();
+                        let target = match &pane.editing {
+                            Some(t) => t.clone(),
+                            None => {
+                                app.mention_popup = None;
+                                return Action::Continue;
+                            }
+                        };
+                        let content = pane.inputs.get(&target).cloned().unwrap_or_default();
+                        let cursor = pane
+                            .cursor_positions
+                            .get(&target)
+                            .copied()
+                            .unwrap_or(content.chars().count());
+                        (content, cursor)
+                    };
+                    match current_mention_query(&content, cursor) {
+                        Some(q) => app.update_mention_query(q),
+                        None => app.mention_popup = None,
+                    }
+                }
                 Action::Continue
             }
             KeyCode::Left => {
                 app.active_pane_mut().move_cursor_left();
+                // Moving left might exit the @… region — close popup if so.
+                if app.mention_popup.is_some() {
+                    let (content, cursor) = {
+                        let pane = app.active_pane();
+                        if let Some(target) = &pane.editing {
+                            let c = pane.inputs.get(target).cloned().unwrap_or_default();
+                            let cur = pane
+                                .cursor_positions
+                                .get(target)
+                                .copied()
+                                .unwrap_or(c.chars().count());
+                            (c, cur)
+                        } else {
+                            (String::new(), 0)
+                        }
+                    };
+                    if current_mention_query(&content, cursor).is_none() {
+                        app.mention_popup = None;
+                    }
+                }
                 Action::Continue
             }
             KeyCode::Right => {

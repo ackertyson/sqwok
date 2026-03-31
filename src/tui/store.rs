@@ -15,6 +15,10 @@ pub struct DisplayMessage {
     /// False until the user explicitly focuses this message with the cursor.
     /// Own outgoing messages start as true (never need to be "read").
     pub read: bool,
+    /// True when the decrypted body contains a `<@my_uuid>` mention tag.
+    pub mentions_me: bool,
+    /// Resolved screennames of all users mentioned in this message.
+    pub mentioned_names: Vec<String>,
 }
 
 /// In-memory display store for the TUI

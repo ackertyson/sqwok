@@ -1,6 +1,6 @@
 # sqwok
 
-Rust TUI chat app. Terminal-based, end-to-end encrypted.
+Group chat from the comfort of your terminal.
 
 ![sqwok crow logo](logo.png)
 
@@ -56,7 +56,7 @@ Credentials are stored in `~/.sqwok/identity/`
 
 ## Keyboard navigation
 
-Mac users may need to configure your terminal to treat `option` key as `Alt`
+Mac users may need to configure your terminal to treat `option` key as `Alt`. ITerm2 may work best if you set your option key(s) to send `Esc+`
 
 ## Why sqwok?
 
@@ -66,6 +66,7 @@ There are tons of online chat apps out there. sqwok makes some unique design cho
 2. **one group per session**: encourages longer, focused interactions
 3. **panes reduce scrolling**: split the window into panes for independent views of the chat, useful for following multiple "hot" threads
 4. **prioritizes live coversations**: local-only message storage means at least some peers have to be online at the same time (see How Messages Work below)
+5. **quiet `@mentions`**: no pings, no dings, just a different "unread" highlight color and an extra asterisk on the "X new" element
 
 Also, it's a shell terminal app. Points for nerdiness.
 

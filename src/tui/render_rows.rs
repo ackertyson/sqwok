@@ -34,6 +34,10 @@ pub enum RenderRow {
         gutter: Gutter,
         /// True when this message (or any hidden reply within a collapsed sub) is unread.
         is_unread: bool,
+        /// True when this message (or any hidden reply within a collapsed sub) mentions the current user.
+        mentions_me: bool,
+        /// Resolved screennames of everyone mentioned in this message body.
+        mentioned_names: Vec<String>,
     },
     CollapsedThread {
         uuid: String,
@@ -46,6 +50,8 @@ pub enum RenderRow {
         typing_active: bool,
         /// True when the header or any hidden reply in this thread is unread.
         is_unread: bool,
+        /// True when the header or any reply in this collapsed thread mentions the current user.
+        mentions_me: bool,
     },
     Input {
         thread_uuid: Option<String>,
@@ -110,15 +116,26 @@ pub fn build(
             let typing_active = typing_indicators
                 .iter()
                 .any(|(t, _)| t.as_deref() == Some(top_uuid.as_str()));
-            let has_unread_replies = msg_store
-                .threads
-                .get(top_uuid)
+            let thread_replies = msg_store.threads.get(top_uuid);
+            let has_unread_replies = thread_replies
                 .map(|replies| {
                     replies
                         .iter()
                         .any(|r| msg_store.by_uuid.get(r).map(|m| !m.read).unwrap_or(false))
                 })
                 .unwrap_or(false);
+            let has_mention_in_thread = msg.mentions_me
+                || thread_replies
+                    .map(|replies| {
+                        replies.iter().any(|r| {
+                            msg_store
+                                .by_uuid
+                                .get(r)
+                                .map(|m| m.mentions_me)
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false);
             rows.push(RenderRow::CollapsedThread {
                 uuid: top_uuid.clone(),
                 author: display_name(&msg.sender_uuid, &msg.sender_name),
@@ -128,6 +145,7 @@ pub fn build(
                 timestamp: format_timestamp(&msg.timestamp),
                 typing_active,
                 is_unread: !msg.read || has_unread_replies,
+                mentions_me: has_mention_in_thread,
             });
         } else {
             let top_gutter = if reply_count > 0 {
@@ -150,6 +168,8 @@ pub fn build(
                 sub_typing_active: false,
                 gutter: top_gutter,
                 is_unread: !msg.read,
+                mentions_me: msg.mentions_me,
+                mentioned_names: msg.mentioned_names.clone(),
             });
 
             // Thread replies if expanded
@@ -216,6 +236,17 @@ pub fn build(
                                 })
                                 .unwrap_or(false)
                         });
+                    let has_mention_in_collapsed_subs = collapsed_sub_count.is_some()
+                        && d2_uuids.iter().any(|u| {
+                            msg_store
+                                .by_uuid
+                                .get(u.as_str())
+                                .map(|m| {
+                                    m.reply_to_uuid.as_deref() == Some(reply_uuid.as_str())
+                                        && m.mentions_me
+                                })
+                                .unwrap_or(false)
+                        });
                     rows.push(RenderRow::Message {
                         uuid: reply_uuid.to_string(),
                         author: display_name(&reply.sender_uuid, &reply.sender_name),
@@ -231,6 +262,8 @@ pub fn build(
                         sub_typing_active,
                         gutter: d1_gutter,
                         is_unread: !reply.read || has_unread_collapsed_subs,
+                        mentions_me: reply.mentions_me || has_mention_in_collapsed_subs,
+                        mentioned_names: reply.mentioned_names.clone(),
                     });
 
                     // Depth-2 replies — only shown when the subthread is not collapsed.
@@ -258,6 +291,8 @@ pub fn build(
                                 sub_typing_active: false,
                                 gutter: Gutter::None,
                                 is_unread: !sub.read,
+                                mentions_me: sub.mentions_me,
+                                mentioned_names: sub.mentioned_names.clone(),
                             });
                         }
 

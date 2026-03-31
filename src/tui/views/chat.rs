@@ -8,7 +8,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::tui::{
-    app::{AppState, Gutter, RenderRow},
+    app::{AppState, Gutter, MentionState, RenderRow},
     pane::Pane,
     style as s,
 };
@@ -97,7 +97,7 @@ pub fn draw_bottom_bar(frame: &mut Frame, area: Rect) {
 /// Width of the left-margin gutter (symbol + space).
 const GUTTER_WIDTH: u16 = 2;
 
-pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane) {
+pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane, is_active: bool) {
     // Clear the entire area first so that stale characters from previous renders
     // (e.g. "No messages yet..." or the scrollback hint) don't bleed through when
     // new content is shorter. Ratatui's buf.set_style only updates styles, not cell
@@ -165,6 +165,8 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
     let mut y = if hint_shown { area.y + 1 } else { area.y };
     let area_bottom = area.y + area.height;
     let mut last_rendered_row = scroll_offset;
+    // Screen position of the cursor in the active input row, for popup placement.
+    let mut input_cursor_screen: Option<(u16, u16)> = None;
 
     for (abs_idx, row) in rows.iter().enumerate().skip(scroll_offset) {
         if y >= area_bottom {
@@ -174,6 +176,33 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
         let row_height = row_visual_height(row, content_width);
         let available = area_bottom.saturating_sub(y);
         let render_height = row_height.min(available);
+
+        // Track cursor screen position for the active (is_active=true) input.
+        if is_active && input_cursor_screen.is_none() {
+            if let RenderRow::Input {
+                is_active: true,
+                content,
+                cursor,
+                indent,
+                ..
+            } = row
+            {
+                let prefix_len = indent_width(*indent) + 2; // "❯ "
+                let avail = (content_width as usize).saturating_sub(prefix_len).max(1);
+                let cursor_content = insert_cursor_marker(content, *cursor);
+                let wrapped_c = wrap_words(&cursor_content, avail, avail);
+                for (line_idx, wline) in wrapped_c.iter().enumerate() {
+                    if let Some(marker_pos) = wline.find('\x01') {
+                        use unicode_width::UnicodeWidthStr;
+                        let col = wline[..marker_pos].width() as u16;
+                        let cx = content_x + prefix_len as u16 + col;
+                        let cy = y + line_idx as u16;
+                        input_cursor_screen = Some((cx, cy));
+                        break;
+                    }
+                }
+            }
+        }
 
         // Draw gutter symbol (▶/▼) then message content alongside it.
         let gutter_area = Rect::new(area.x, y, GUTTER_WIDTH, render_height);
@@ -186,16 +215,34 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
     }
 
     // Unread-above indicator: count unread rows hidden above the viewport.
-    let unread_above = rows[..scroll_offset]
-        .iter()
-        .filter(|r| match r {
-            RenderRow::Message { is_unread, .. } => *is_unread,
-            RenderRow::CollapsedThread { is_unread, .. } => *is_unread,
-            _ => false,
-        })
-        .count();
+    let (unread_above, mention_above) =
+        rows[..scroll_offset]
+            .iter()
+            .fold((0usize, false), |(count, mention), r| match r {
+                RenderRow::Message {
+                    is_unread,
+                    mentions_me,
+                    ..
+                } => (
+                    count + *is_unread as usize,
+                    mention || (*is_unread && *mentions_me),
+                ),
+                RenderRow::CollapsedThread {
+                    is_unread,
+                    mentions_me,
+                    ..
+                } => (
+                    count + *is_unread as usize,
+                    mention || (*is_unread && *mentions_me),
+                ),
+                _ => (count, mention),
+            });
     if unread_above > 0 {
-        let text = format!("↑ {} new", unread_above);
+        let text = if mention_above {
+            format!("↑ {} new*", unread_above)
+        } else {
+            format!("↑ {} new", unread_above)
+        };
         let w = text.chars().count() as u16 + 1;
         let indicator = Paragraph::new(text).style(
             Style::default()
@@ -208,16 +255,34 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
 
     // Unread-below indicator: count unread rows hidden below the viewport.
     if last_rendered_row + 1 < total_rows {
-        let unread_below = rows[last_rendered_row + 1..]
-            .iter()
-            .filter(|r| match r {
-                RenderRow::Message { is_unread, .. } => *is_unread,
-                RenderRow::CollapsedThread { is_unread, .. } => *is_unread,
-                _ => false,
-            })
-            .count();
+        let (unread_below, mention_below) = rows[last_rendered_row + 1..].iter().fold(
+            (0usize, false),
+            |(count, mention), r| match r {
+                RenderRow::Message {
+                    is_unread,
+                    mentions_me,
+                    ..
+                } => (
+                    count + *is_unread as usize,
+                    mention || (*is_unread && *mentions_me),
+                ),
+                RenderRow::CollapsedThread {
+                    is_unread,
+                    mentions_me,
+                    ..
+                } => (
+                    count + *is_unread as usize,
+                    mention || (*is_unread && *mentions_me),
+                ),
+                _ => (count, mention),
+            },
+        );
         if unread_below > 0 {
-            let text = format!("↓ {} new", unread_below);
+            let text = if mention_below {
+                format!("↓ {} new*", unread_below)
+            } else {
+                format!("↓ {} new", unread_below)
+            };
             let w = text.chars().count() as u16 + 1;
             let indicator = Paragraph::new(text).style(
                 Style::default()
@@ -231,6 +296,13 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane)
                 1,
             );
             frame.render_widget(indicator, ind_area);
+        }
+    }
+
+    // Mention autocomplete popup — only for the active pane.
+    if is_active {
+        if let Some(ref popup) = app.mention_popup {
+            draw_mention_popup(frame, area, popup, input_cursor_screen);
         }
     }
 }
@@ -416,13 +488,24 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
         s::BG
     };
 
-    // Pre-extract unread flag (with highlight priority) for use after the match.
-    let row_is_unread = match row {
-        RenderRow::Message { is_unread, highlight_age, .. } => {
-            *is_unread && !highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false)
+    // Pre-extract unread + mention flags (with highlight priority) for use after the match.
+    let (row_is_unread, row_mentions_me) = match row {
+        RenderRow::Message {
+            is_unread,
+            mentions_me,
+            highlight_age,
+            ..
+        } => {
+            let unread =
+                *is_unread && !highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false);
+            (unread, *mentions_me)
         }
-        RenderRow::CollapsedThread { is_unread, .. } => *is_unread,
-        _ => false,
+        RenderRow::CollapsedThread {
+            is_unread,
+            mentions_me,
+            ..
+        } => (*is_unread, *mentions_me),
+        _ => (false, false),
     };
 
     match row {
@@ -451,20 +534,23 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             collapsed_sub_count,
             sub_typing_active,
             is_unread,
+            mentions_me,
+            mentioned_names,
             ..
         } => {
+            let highlighted = highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false);
             let actual_bg = if is_selected {
                 s::selection_bg()
-            } else if highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false) {
+            } else if highlighted {
                 s::highlight_bg()
+            } else if *is_unread && *mentions_me {
+                s::mention_bg()
             } else if *is_unread {
                 s::unread_bg()
             } else {
                 s::BG
             };
-            let show_unread_trail = *is_unread
-                && !is_selected
-                && !highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false);
+            let show_unread_trail = *is_unread && !is_selected && !highlighted;
 
             let indent_str = build_indent(*indent);
             let name_style = Style::default()
@@ -527,6 +613,23 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                     &full_body.chars().take(40).collect::<String>()
                 );
             }
+            let mention_style = Style::default()
+                .fg(s::mention_inline_fg())
+                .bg(s::mention_inline_bg());
+            // Split `text` into body spans, highlighting any `@name` tokens.
+            let body_line_spans = |text: String| -> Vec<Span<'static>> {
+                let body_style = Style::default().fg(s::fg());
+                crate::tui::mention::split_body_spans(&text, mentioned_names)
+                    .into_iter()
+                    .map(|(seg, is_mention)| {
+                        if is_mention {
+                            Span::styled(seg, mention_style)
+                        } else {
+                            Span::styled(seg, body_style)
+                        }
+                    })
+                    .collect()
+            };
             for (i, line_text) in wrapped.into_iter().enumerate() {
                 let is_first = i == 0;
                 let is_last = i + 1 == n;
@@ -536,29 +639,27 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                         Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
                         Span::styled(author.clone(), name_style),
                         Span::styled("  ", body_style),
-                        Span::styled(line_text, body_style),
                     ];
+                    spans.extend(body_line_spans(line_text));
                     spans.extend(trailing_spans(vec![]));
                     Line::from(spans)
                 } else if is_first {
-                    Line::from(vec![
+                    let mut spans = vec![
                         Span::styled(indent_str.clone(), Style::default().fg(s::dim())),
                         Span::styled(author.clone(), name_style),
                         Span::styled("  ", body_style),
-                        Span::styled(line_text, body_style),
-                    ])
-                } else if is_last {
-                    let mut spans = vec![
-                        Span::raw(padding.clone()),
-                        Span::styled(line_text, body_style),
                     ];
+                    spans.extend(body_line_spans(line_text));
+                    Line::from(spans)
+                } else if is_last {
+                    let mut spans = vec![Span::raw(padding.clone())];
+                    spans.extend(body_line_spans(line_text));
                     spans.extend(trailing_spans(vec![]));
                     Line::from(spans)
                 } else {
-                    Line::from(vec![
-                        Span::raw(padding.clone()),
-                        Span::styled(line_text, body_style),
-                    ])
+                    let mut spans = vec![Span::raw(padding.clone())];
+                    spans.extend(body_line_spans(line_text));
+                    Line::from(spans)
                 };
                 // For rows with a trail (selected or unread): pin bg on every text
                 // span so the text area keeps actual_bg while the paragraph's bg
@@ -578,6 +679,8 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
 
             let para_bg = if is_selected {
                 s::selection_trail_bg()
+            } else if show_unread_trail && *mentions_me {
+                s::mention_trail_bg()
             } else if show_unread_trail {
                 s::unread_trail_bg()
             } else {
@@ -596,10 +699,13 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             timestamp,
             typing_active,
             is_unread,
+            mentions_me,
             ..
         } => {
             let actual_bg = if is_selected {
                 s::selection_bg()
+            } else if *is_unread && *mentions_me {
+                s::mention_bg()
             } else if *is_unread {
                 s::unread_bg()
             } else {
@@ -673,6 +779,8 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             };
             let para_bg = if is_selected {
                 s::selection_trail_bg()
+            } else if show_unread_trail && *mentions_me {
+                s::mention_trail_bg()
             } else if show_unread_trail {
                 s::unread_trail_bg()
             } else {
@@ -755,6 +863,8 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
     }
     if is_selected {
         apply_selection_fade(frame, area);
+    } else if row_is_unread && row_mentions_me {
+        apply_mention_fade(frame, area);
     } else if row_is_unread {
         apply_unread_fade(frame, area);
     }
@@ -822,6 +932,74 @@ fn apply_unread_fade(frame: &mut Frame, area: Rect) {
         s::selection_fade_steps(),
         s::unread_bg_fade,
     );
+}
+
+fn apply_mention_fade(frame: &mut Frame, area: Rect) {
+    apply_trail_fade(
+        frame,
+        area,
+        s::mention_trail_bg(),
+        s::selection_fade_steps(),
+        s::mention_bg_fade,
+    );
+}
+
+/// Draw the `@mention` autocomplete popup one line below the cursor.
+///
+/// `cursor_screen` is the `(x, y)` terminal position of the cursor in the
+/// active input row (from tracking during the main render loop).  When absent
+/// (cursor not on screen), the popup falls back to just above the bottom edge.
+fn draw_mention_popup(
+    frame: &mut Frame,
+    area: Rect,
+    popup: &MentionState,
+    cursor_screen: Option<(u16, u16)>,
+) {
+    if popup.matches.is_empty() {
+        return;
+    }
+
+    let display: Vec<_> = popup.matches.iter().take(5).collect();
+    let popup_h = display.len() as u16;
+
+    // Width: widest "@name" + 1 space padding on each side.
+    let name_width = display
+        .iter()
+        .map(|(_, name)| name.chars().count() + 1) // 1 for '@'
+        .max()
+        .unwrap_or(8);
+    let popup_w = (name_width as u16 + 2).min(area.width);
+
+    // Anchor the popup's left edge at the cursor x, one row below the cursor.
+    // Clamp so it stays inside the pane and doesn't overflow the bottom.
+    let (anchor_x, anchor_y) =
+        cursor_screen.unwrap_or((area.x + 2, area.y + area.height.saturating_sub(popup_h + 1)));
+    // Popup appears one line BELOW the input line that contains the cursor.
+    let popup_y = (anchor_y + 1).min(area.y + area.height.saturating_sub(popup_h));
+    let popup_x = anchor_x.min(area.x + area.width.saturating_sub(popup_w));
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+    frame.render_widget(Clear, popup_area);
+
+    for (i, (_, name)) in display.iter().enumerate() {
+        let y = popup_area.y + i as u16;
+        let is_sel = i == popup.selected;
+        let (fg, bg) = if is_sel {
+            (s::BG, s::accent())
+        } else {
+            (s::fg(), s::selection_bg())
+        };
+        let text = format!("@{}", name);
+        let row_area = Rect::new(popup_area.x, y, popup_area.width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                text,
+                Style::default().fg(fg).bg(bg),
+            )))
+            .style(Style::default().bg(bg)),
+            row_area,
+        );
+    }
 }
 
 fn indent_width(indent: u8) -> usize {

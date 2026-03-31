@@ -1,6 +1,7 @@
 pub mod app;
 pub mod event;
 pub mod input;
+pub mod mention;
 pub mod pane;
 pub mod render;
 pub mod render_rows;
