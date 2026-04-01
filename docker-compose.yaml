@@ -7,6 +7,11 @@ services:
             SQWOK_SERVER: https://sqwok.fixbase.io
         volumes:
             - sqwok-data:/home/sqwok/.sqwok
+        read_only: true
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
 
 volumes:
     sqwok-data:

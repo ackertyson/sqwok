@@ -39,3 +39,4 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 clap = { version = "4", features = ["derive"] }
 terminal_size = "0.4"
 tokio-stream = "0.1"
+qrcode = "0.14"

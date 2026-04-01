@@ -71,7 +71,7 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
     );
     println!("...then come back here...");
 
-    let csr_code = poll_for_verification(server_url, &request_uuid).await?;
+    let (csr_code, totp_uri) = poll_for_verification(server_url, &request_uuid).await?;
 
     println!("\nEmail verified! Generating keys...");
 
@@ -80,6 +80,7 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
         identity_dir,
         &request_uuid,
         csr_code.as_deref(),
+        totp_uri.as_deref(),
         &screenname,
         &pending_path,
     )
@@ -105,11 +106,13 @@ async fn resume_from_polling(
         Some("verified") => {
             println!("Already verified! Completing registration...");
             let csr_code = resp["csr_code"].as_str().map(|s| s.to_string());
+            let totp_uri = resp["totp_uri"].as_str().map(|s| s.to_string());
             complete_registration(
                 server_url,
                 identity_dir,
                 request_uuid,
                 csr_code.as_deref(),
+                totp_uri.as_deref(),
                 &screenname,
                 &pending_path,
             )
@@ -121,12 +124,13 @@ async fn resume_from_polling(
         }
         Some("pending") => {
             println!("Still waiting for email verification...");
-            let csr_code = poll_for_verification(server_url, request_uuid).await?;
+            let (csr_code, totp_uri) = poll_for_verification(server_url, request_uuid).await?;
             complete_registration(
                 server_url,
                 identity_dir,
                 request_uuid,
                 csr_code.as_deref(),
+                totp_uri.as_deref(),
                 &screenname,
                 &pending_path,
             )
@@ -136,7 +140,10 @@ async fn resume_from_polling(
     }
 }
 
-async fn poll_for_verification(server_url: &str, request_uuid: &str) -> Result<Option<String>> {
+async fn poll_for_verification(
+    server_url: &str,
+    request_uuid: &str,
+) -> Result<(Option<String>, Option<String>)> {
     let client = reqwest::Client::new();
     let url = format!("{}/api/verify/{}", server_url, request_uuid);
 
@@ -147,7 +154,8 @@ async fn poll_for_verification(server_url: &str, request_uuid: &str) -> Result<O
         match resp["status"].as_str() {
             Some("verified") => {
                 let csr_code = resp["csr_code"].as_str().map(|s| s.to_string());
-                return Ok(csr_code);
+                let totp_uri = resp["totp_uri"].as_str().map(|s| s.to_string());
+                return Ok((csr_code, totp_uri));
             }
             Some("expired") => bail!("Verification expired. Please try again."),
             Some("pending") => {
@@ -162,81 +170,161 @@ async fn poll_for_verification(server_url: &str, request_uuid: &str) -> Result<O
     bail!("Verification timed out after 15 minutes.")
 }
 
+fn extract_totp_secret(totp_uri: &str) -> Option<String> {
+    totp_uri
+        .split('?')
+        .nth(1)?
+        .split('&')
+        .find(|p| p.starts_with("secret="))
+        .map(|p| p["secret=".len()..].to_string())
+}
+
+fn display_totp_prompt(totp_uri: &str) {
+    use qrcode::render::unicode;
+    use qrcode::QrCode;
+
+    match QrCode::new(totp_uri.as_bytes()) {
+        Ok(code) => {
+            let image = code.render::<unicode::Dense1x2>().build();
+            println!("{}", image);
+        }
+        Err(e) => {
+            eprintln!("(Could not render QR code: {})", e);
+        }
+    }
+
+    let secret =
+        extract_totp_secret(totp_uri).unwrap_or_else(|| "(could not extract secret)".to_string());
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│  !! ALREADY HAVE SQWOK IN YOUR AUTHENTICATOR APP? !!        │");
+    println!("│  Skip the QR code — just enter your existing 6-digit code.  │");
+    println!("│  Re-scanning will break your account access.                │");
+    println!("├─────────────────────────────────────────────────────────────┤");
+    println!("│  New user: scan the QR code above with your authenticator,  │");
+    println!("│  then enter the 6-digit code below.                         │");
+    println!("│                                                             │");
+    println!("│  Manual entry key: {:<41}│", secret);
+    println!("└─────────────────────────────────────────────────────────────┘");
+}
+
 async fn complete_registration(
     server_url: &str,
     identity_dir: &Path,
     request_uuid: &str,
     csr_code: Option<&str>,
+    totp_uri: Option<&str>,
     screenname: &str,
     pending_path: &Path,
 ) -> Result<()> {
     let (key_pem, csr_pem) = generate_keypair_and_csr()?;
 
-    let mut csr_body = serde_json::json!({
-        "request_uuid": request_uuid,
-        "csr": csr_pem
-    });
-    if let Some(code) = csr_code {
-        csr_body["csr_code"] = serde_json::Value::String(code.to_string());
+    if let Some(uri) = totp_uri {
+        display_totp_prompt(uri);
     }
+
+    let totp_code = prompt_totp_code()?;
 
     let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{}/api/csr", server_url))
-        .json(&csr_body)
-        .send()
-        .await?;
 
-    if !resp.status().is_success() {
-        bail!("CSR submission failed: {}", resp.text().await?);
+    // Retry loop: only totp_code changes between attempts
+    let mut current_totp_code = totp_code;
+    loop {
+        let mut csr_body = serde_json::json!({
+            "request_uuid": request_uuid,
+            "csr": csr_pem,
+            "totp_code": current_totp_code,
+        });
+        if let Some(code) = csr_code {
+            csr_body["csr_code"] = serde_json::Value::String(code.to_string());
+        }
+
+        let resp = client
+            .post(format!("{}/api/csr", server_url))
+            .json(&csr_body)
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            let body: serde_json::Value = resp.json().await?;
+            let cert_pem = body["cert"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing cert in response"))?;
+            let ca_pem = body["ca_cert"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing ca_cert in response"))?;
+            let user_uuid = body["user_uuid"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing user_uuid in response"))?;
+
+            crate::identity::credentials::save_credentials(
+                identity_dir,
+                &key_pem,
+                cert_pem,
+                ca_pem,
+                user_uuid,
+            )?;
+
+            let e2e_public = crate::identity::e2e_keys::generate_and_store(identity_dir)?;
+
+            let token = crate::auth::token::build_token(identity_dir, server_url)?;
+            let upload_resp = client
+                .post(format!("{}/api/e2e_key", server_url))
+                .header("Authorization", format!("Bearer {}", token))
+                .json(&serde_json::json!({
+                    "public_key": base64::engine::general_purpose::STANDARD.encode(&e2e_public)
+                }))
+                .send()
+                .await?;
+
+            if !upload_resp.status().is_success() {
+                eprintln!(
+                    "Warning: E2E key upload failed: {}",
+                    upload_resp.text().await?
+                );
+            }
+
+            std::fs::write(identity_dir.join("screenname"), screenname)?;
+            std::fs::remove_file(pending_path).ok();
+            std::fs::remove_file(identity_dir.join("pending_screenname")).ok();
+
+            println!("\nSetup complete! Identity saved to {:?}", identity_dir);
+            println!("User UUID: {}", user_uuid);
+            return Ok(());
+        }
+
+        // Parse error response
+        let status = resp.status();
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        let error = body["error"].as_str().unwrap_or("unknown");
+
+        match error {
+            "invalid_totp_code" | "totp_required" => {
+                eprintln!("Incorrect code. Please try again.");
+                current_totp_code = prompt_totp_code()?;
+            }
+            "totp_locked" => {
+                bail!("Too many incorrect attempts. Please restart registration.");
+            }
+            _ => {
+                bail!("CSR submission failed ({}): {}", status, error);
+            }
+        }
     }
+}
 
-    let body: serde_json::Value = resp.json().await?;
-    let cert_pem = body["cert"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing cert in response"))?;
-    let ca_pem = body["ca_cert"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing ca_cert in response"))?;
-    let user_uuid = body["user_uuid"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing user_uuid in response"))?;
-
-    crate::identity::credentials::save_credentials(
-        identity_dir,
-        &key_pem,
-        cert_pem,
-        ca_pem,
-        user_uuid,
-    )?;
-
-    let e2e_public = crate::identity::e2e_keys::generate_and_store(identity_dir)?;
-
-    let token = crate::auth::token::build_token(identity_dir, server_url)?;
-    let upload_resp = client
-        .post(format!("{}/api/e2e_key", server_url))
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({
-            "public_key": base64::engine::general_purpose::STANDARD.encode(&e2e_public)
-        }))
-        .send()
-        .await?;
-
-    if !upload_resp.status().is_success() {
-        eprintln!(
-            "Warning: E2E key upload failed: {}",
-            upload_resp.text().await?
-        );
-    }
-
-    std::fs::write(identity_dir.join("screenname"), screenname)?;
-    std::fs::remove_file(pending_path).ok();
-    std::fs::remove_file(identity_dir.join("pending_screenname")).ok();
-
-    println!("\nSetup complete! Identity saved to {:?}", identity_dir);
-    println!("User UUID: {}", user_uuid);
-
-    Ok(())
+fn prompt_totp_code() -> Result<String> {
+    let code: String = dialoguer::Input::new()
+        .with_prompt("Enter 6-digit authenticator code")
+        .validate_with(|s: &String| -> Result<(), &str> {
+            if s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()) {
+                Ok(())
+            } else {
+                Err("Code must be exactly 6 digits")
+            }
+        })
+        .interact_text()?;
+    Ok(code)
 }
 
 fn generate_keypair_and_csr() -> Result<(String, String)> {

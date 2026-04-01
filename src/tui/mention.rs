@@ -69,7 +69,7 @@ pub fn extract_mentioned_names(body: &str, name_cache: &HashMap<String, String>)
                 }
             }
         }
-        rest = &after_open; // skip past the invalid "<@"
+        rest = after_open; // skip past the invalid "<@"
     }
     names
 }
