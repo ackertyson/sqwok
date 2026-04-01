@@ -48,11 +48,13 @@ On first launch the client walks you through registration:
 
 1. Enter your email and screenname
 2. Check your email and click the verification link
-3. The client polls until verified, then generates a keypair and gets a cert signed by the server's CA
+3. The client polls until verified
+4. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.) and enter the 6-digit TOTP code (you will need this same authenticator app registration if you ever need to recover your account later!)
+5. The client generates a keypair and gets a cert signed by the server's CA
 
 Credentials are stored in `~/.sqwok/identity/`
 
-*NOTE: You are encouraged to configure your OS to use a time server--clock drift is a common source of key generation failure.*
+*NOTE: You are encouraged to configure your OS to use a time server — clock drift is a common source of registration failure.*
 
 ## Keyboard navigation
 
@@ -72,9 +74,16 @@ Also, it's a shell terminal app. Points for nerdiness.
 
 ## Account Recovery
 
-If you lose your device (or remove `~/.sqwok/identity/`) and need to re-register, run `sqwok` re-enter your same email at the prompt. The server issues a new cert with your original UUID and disconnects any old sessions.
+If you lose your device (or delete `~/.sqwok/identity/`) and need to re-register:
+
+1. Run `sqwok` and enter your original email at the prompt
+2. Click the verification link in your email
+3. Enter the 6-digit TOTP code from your **existing** authenticator app entry — **do not re-scan a QR code**, that would break your account (the QR code only shows in this flow so it can't be used to sniff whether an account already exists for a given email)
+4. The client generates a new keypair; the server issues a new cert with your original UUID and disconnects any old sessions
 
 When you rejoin a chat, other online members will automatically sync you the message history they have and re-distribute encryption keys for your new device. How much history you recover depends on what your peers still have locally — messages that have fallen off every peer's device are gone for good.
+
+**If you lose access to your authenticator app**, account recovery is not possible without contacting the server administrator.
 
 ## How Messages Work
 

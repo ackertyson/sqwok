@@ -97,14 +97,14 @@ pub fn selection_fade_steps() -> u16 {
 }
 
 /// Interpolated color for the fade zone at the leading edge of the trailing
-/// purple bar. Blends from `selection_bg` (text area) into `selection_trail_bg`
+/// blue bar. Blends from `selection_bg` (text area) into `selection_trail_bg`
 /// (the vivid bar) so the bar eases in rather than appearing with a hard edge.
 /// `step` 0 is closest to the text; higher steps approach `selection_trail_bg`.
 pub fn selection_bg_fade(step: u16, total_steps: u16) -> Color {
     let t = (step + 1) as f32 / (total_steps + 1) as f32;
     if is_truecolor() {
         let (r0, g0, b0) = (30u8, 30u8, 50u8); // selection_bg
-        let (r1, g1, b1) = (90u8, 60u8, 160u8); // selection_trail_bg
+        let (r1, g1, b1) = (38u8, 62u8, 130u8); // selection_trail_bg
         Color::Rgb(
             (r0 as f32 + (r1 - r0) as f32 * t) as u8,
             (g0 as f32 + (g1 - g0) as f32 * t) as u8,
@@ -127,21 +127,21 @@ pub fn highlight_bg() -> Color {
 }
 #[inline]
 pub fn unread_bg() -> Color {
-    color((45, 32, 0), 237)
+    color((0, 22, 18), 237)
 }
 #[inline]
 pub fn unread_trail_bg() -> Color {
-    color((190, 145, 0), 178)
+    color((45, 160, 110), 178)
 }
 
 /// Interpolated color for the fade zone at the leading edge of the unread
 /// trail bar. Blends from `unread_bg` (text area) into `unread_trail_bg`
-/// (the vivid gold bar). `step` 0 is closest to the text.
+/// (the vivid sea-green bar). `step` 0 is closest to the text.
 pub fn unread_bg_fade(step: u16, total_steps: u16) -> Color {
     let t = (step + 1) as f32 / (total_steps + 1) as f32;
     if is_truecolor() {
-        let (r0, g0, b0) = (45u8, 32u8, 0u8); // unread_bg
-        let (r1, g1, b1) = (190u8, 145u8, 0u8); // unread_trail_bg
+        let (r0, g0, b0) = (0u8, 22u8, 18u8); // unread_bg
+        let (r1, g1, b1) = (45u8, 160u8, 110u8); // unread_trail_bg
         Color::Rgb(
             (r0 as f32 + (r1 - r0) as f32 * t) as u8,
             (g0 as f32 + (g1 - g0) as f32 * t) as u8,
@@ -217,7 +217,7 @@ pub fn shortcut_key_color() -> Color {
 
 #[inline]
 pub fn selection_trail_bg() -> Color {
-    color((90, 60, 160), 247)
+    color((38, 62, 130), 247)
 }
 #[inline]
 pub fn warning_color() -> Color {
