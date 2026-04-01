@@ -117,9 +117,8 @@ pub fn build(
                 .iter()
                 .any(|(t, _)| t.as_deref() == Some(top_uuid.as_str()));
             let thread_replies = msg_store.threads.get(top_uuid);
-            let (replies_unread, replies_mention) = msg_store.unread_status(
-                thread_replies.into_iter().flatten().map(String::as_str),
-            );
+            let (replies_unread, replies_mention) =
+                msg_store.unread_status(thread_replies.into_iter().flatten().map(String::as_str));
             rows.push(RenderRow::CollapsedThread {
                 uuid: top_uuid.clone(),
                 author: display_name(&msg.sender_uuid, &msg.sender_name),
@@ -241,7 +240,9 @@ pub fn build(
                                 thread_uuid: Some(top_uuid.clone()),
                                 reply_to_uuid: sub.reply_to_uuid.clone(),
                                 is_pending: sub.pending,
-                                highlight_age: highlights.get(sub_uuid.as_str()).map(|i| i.elapsed()),
+                                highlight_age: highlights
+                                    .get(sub_uuid.as_str())
+                                    .map(|i| i.elapsed()),
                                 collapsed_sub_count: None,
                                 sub_typing_active: false,
                                 gutter: Gutter::None,
@@ -277,7 +278,14 @@ pub fn build(
     }
 
     // Depth-0 footer: typing indicator + main chat input
-    push_depth_footer(&mut rows, pane, InputTarget::MainChat, &(None, None), typing_indicators, false);
+    push_depth_footer(
+        &mut rows,
+        pane,
+        InputTarget::MainChat,
+        &(None, None),
+        typing_indicators,
+        false,
+    );
 
     rows
 }
@@ -286,7 +294,12 @@ pub fn build(
 /// indent are derived from the target itself. When `only_when_active` is true
 /// the row is only appended if the pane is currently editing that target
 /// (used for depth-2 inline reply inputs).
-fn push_input_row(rows: &mut Vec<RenderRow>, pane: &Pane, target: InputTarget, only_when_active: bool) {
+fn push_input_row(
+    rows: &mut Vec<RenderRow>,
+    pane: &Pane,
+    target: InputTarget,
+    only_when_active: bool,
+) {
     let is_active = pane.editing.as_ref() == Some(&target);
     if only_when_active && !is_active {
         return;
@@ -320,7 +333,9 @@ fn push_depth_footer(
     only_input_when_active: bool,
 ) {
     if typing_indicators.contains(typing_key) {
-        rows.push(RenderRow::TypingIndicator { indent: target.indent() });
+        rows.push(RenderRow::TypingIndicator {
+            indent: target.indent(),
+        });
     }
     push_input_row(rows, pane, target, only_input_when_active);
 }

@@ -146,15 +146,25 @@ impl Pane {
 
     pub fn move_cursor_to_end(&mut self) {
         if let Some(target) = self.editing.as_ref() {
-            let len = self.inputs.get(target).map(|s| s.chars().count()).unwrap_or(0);
+            let len = self
+                .inputs
+                .get(target)
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
             let pos = self.cursor_positions.entry(target.clone()).or_insert(len);
             *pos = len;
         }
     }
 
     pub fn move_cursor_word_back(&mut self) {
-        let Some(target) = self.editing.clone() else { return };
-        let chars: Vec<char> = self.inputs.get(&target).map(|s| s.chars().collect()).unwrap_or_default();
+        let Some(target) = self.editing.clone() else {
+            return;
+        };
+        let chars: Vec<char> = self
+            .inputs
+            .get(&target)
+            .map(|s| s.chars().collect())
+            .unwrap_or_default();
         let len = chars.len();
         let cursor = self.cursor_positions.entry(target).or_insert(len);
         while *cursor > 0 && !chars[*cursor - 1].is_alphanumeric() {
@@ -166,8 +176,14 @@ impl Pane {
     }
 
     pub fn move_cursor_word_forward(&mut self) {
-        let Some(target) = self.editing.clone() else { return };
-        let chars: Vec<char> = self.inputs.get(&target).map(|s| s.chars().collect()).unwrap_or_default();
+        let Some(target) = self.editing.clone() else {
+            return;
+        };
+        let chars: Vec<char> = self
+            .inputs
+            .get(&target)
+            .map(|s| s.chars().collect())
+            .unwrap_or_default();
         let len = chars.len();
         let cursor = self.cursor_positions.entry(target).or_insert(len);
         while *cursor < len && !chars[*cursor].is_alphanumeric() {
@@ -179,8 +195,14 @@ impl Pane {
     }
 
     pub fn delete_word_back(&mut self) {
-        let Some(target) = self.editing.clone() else { return };
-        let chars: Vec<char> = self.inputs.get(&target).map(|s| s.chars().collect()).unwrap_or_default();
+        let Some(target) = self.editing.clone() else {
+            return;
+        };
+        let chars: Vec<char> = self
+            .inputs
+            .get(&target)
+            .map(|s| s.chars().collect())
+            .unwrap_or_default();
         let len = chars.len();
         let end = self.cursor_positions.get(&target).copied().unwrap_or(len);
         let mut new_pos = end;
@@ -206,8 +228,14 @@ impl Pane {
     }
 
     pub fn delete_word_forward(&mut self) {
-        let Some(target) = self.editing.clone() else { return };
-        let chars: Vec<char> = self.inputs.get(&target).map(|s| s.chars().collect()).unwrap_or_default();
+        let Some(target) = self.editing.clone() else {
+            return;
+        };
+        let chars: Vec<char> = self
+            .inputs
+            .get(&target)
+            .map(|s| s.chars().collect())
+            .unwrap_or_default();
         let len = chars.len();
         let start = self.cursor_positions.get(&target).copied().unwrap_or(len);
         let mut end = start;
