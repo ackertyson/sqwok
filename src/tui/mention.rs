@@ -89,21 +89,14 @@ pub fn split_body_spans(line: &str, mentioned_names: &[String]) -> Vec<(String, 
 
     while i < chars.len() {
         if chars[i] == '@' {
-            // Find the end of the @word (alphanumeric, _, -)
-            let word_start = i + 1;
-            let mut word_end = word_start;
-            while word_end < chars.len()
-                && (chars[word_end].is_alphanumeric()
-                    || chars[word_end] == '_'
-                    || chars[word_end] == '-')
-            {
-                word_end += 1;
-            }
-            let word: String = chars[word_start..word_end].iter().collect();
-            if mentioned_names
+            // Try each known name; prefer longest match.
+            let tail: String = chars[i + 1..].iter().collect();
+            let matched = mentioned_names
                 .iter()
-                .any(|n| n.eq_ignore_ascii_case(&word))
-            {
+                .filter(|n| tail.to_lowercase().starts_with(&n.to_lowercase()))
+                .max_by_key(|n| n.len());
+            if let Some(name) = matched {
+                let word_end = i + 1 + name.chars().count();
                 // Push the plain text before this mention.
                 if i > segment_start {
                     result.push((chars[segment_start..i].iter().collect(), false));
@@ -188,6 +181,17 @@ mod tests {
         let body = "no mentions here <@notauuid> or </@> this";
         let rendered = render_body(body, &HashMap::new());
         assert_eq!(rendered, body);
+    }
+
+    #[test]
+    fn test_split_body_spans_slash_in_name() {
+        let names = vec!["foo/bar".to_string()];
+        let spans = split_body_spans("hey @foo/bar!", &names);
+        assert_eq!(spans, vec![
+            ("hey ".to_string(), false),
+            ("@foo/bar".to_string(), true),
+            ("!".to_string(), false),
+        ]);
     }
 
     #[test]
