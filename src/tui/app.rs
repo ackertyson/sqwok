@@ -438,13 +438,7 @@ impl AppState {
             }
         }
 
-        let (thread_uuid, reply_to_uuid) = match &editing {
-            InputTarget::MainChat => (None, None),
-            InputTarget::Thread(root) => (Some(root.clone()), None),
-            InputTarget::Reply(reply_uuid, thread) => {
-                (Some(thread.clone()), Some(reply_uuid.clone()))
-            }
-        };
+        let (thread_uuid, reply_to_uuid) = editing.to_wire_uuids();
 
         let frame = match &self.chat_channel {
             Some(ch) => ch.typing_notify_frame(thread_uuid.as_deref(), reply_to_uuid.as_deref()),
@@ -501,11 +495,7 @@ impl AppState {
             ..
         }) = rows.get(new_sel)
         {
-            let target = match (thread_uuid, reply_to_uuid) {
-                (Some(thread), Some(reply)) => InputTarget::Reply(reply.clone(), thread.clone()),
-                (Some(t), None) => InputTarget::Thread(t.clone()),
-                _ => InputTarget::MainChat,
-            };
+            let target = InputTarget::from_uuids(thread_uuid.as_ref(), reply_to_uuid.as_ref());
             self.panes[self.active_pane].editing = Some(target);
         } else {
             // Clear editing state when navigating away from an input row
@@ -733,16 +723,7 @@ impl AppState {
                 ..
             } = r
             {
-                match &editing {
-                    InputTarget::MainChat => thread_uuid.is_none() && reply_to_uuid.is_none(),
-                    InputTarget::Thread(root) => {
-                        thread_uuid.as_deref() == Some(root.as_str()) && reply_to_uuid.is_none()
-                    }
-                    InputTarget::Reply(reply_uuid, thread) => {
-                        thread_uuid.as_deref() == Some(thread.as_str())
-                            && reply_to_uuid.as_deref() == Some(reply_uuid.as_str())
-                    }
-                }
+                editing.matches_input_row(thread_uuid, reply_to_uuid)
             } else {
                 false
             }
@@ -878,13 +859,10 @@ impl AppState {
         let target_for_mentions = editing_target.clone().unwrap_or(InputTarget::MainChat);
         let wire_text = self.apply_pending_mentions(display_text, &target_for_mentions);
 
-        let (thread_uuid, reply_to_uuid): (Option<String>, Option<String>) = match &editing_target {
-            Some(InputTarget::Thread(root)) => (Some(root.clone()), None),
-            Some(InputTarget::Reply(reply_uuid, thread)) => {
-                (Some(thread.clone()), Some(reply_uuid.clone()))
-            }
-            _ => (None, None),
-        };
+        let (thread_uuid, reply_to_uuid) = editing_target
+            .as_ref()
+            .map(|t| t.to_wire_uuids())
+            .unwrap_or((None, None));
 
         let chat = match &mut self.chat_channel {
             Some(c) => c,
@@ -934,6 +912,10 @@ impl AppState {
                     }
                     // Find the input row matching the context we just sent from.
                     let rows = self.build_render_rows();
+                    let effective_target = editing_target
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or(InputTarget::MainChat);
                     let target_idx = rows.iter().position(|r| {
                         if let RenderRow::Input {
                             thread_uuid: row_thread,
@@ -941,19 +923,7 @@ impl AppState {
                             ..
                         } = r
                         {
-                            match &editing_target {
-                                None | Some(InputTarget::MainChat) => {
-                                    row_thread.is_none() && row_reply.is_none()
-                                }
-                                Some(InputTarget::Thread(root)) => {
-                                    row_thread.as_deref() == Some(root.as_str())
-                                        && row_reply.is_none()
-                                }
-                                Some(InputTarget::Reply(reply_uuid, thread)) => {
-                                    row_thread.as_deref() == Some(thread.as_str())
-                                        && row_reply.as_deref() == Some(reply_uuid.as_str())
-                                }
-                            }
+                            effective_target.matches_input_row(row_thread, row_reply)
                         } else {
                             false
                         }

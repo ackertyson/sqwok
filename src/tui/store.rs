@@ -91,4 +91,19 @@ impl TuiMessageStore {
     pub fn reply_count(&self, uuid: &str) -> usize {
         self.threads.get(uuid).map(|v| v.len()).unwrap_or(0)
     }
+
+    /// Returns `(any_unread, any_unread_mention)` for a set of message UUIDs.
+    /// `any_unread_mention` is only true when an *unread* message mentions the user;
+    /// a read mention does not contribute. This is the single source of truth for
+    /// collapsed-group highlight color decisions.
+    pub fn unread_status<'a>(&self, uuids: impl IntoIterator<Item = &'a str>) -> (bool, bool) {
+        uuids
+            .into_iter()
+            .fold((false, false), |(unread, mention), uuid| {
+                match self.by_uuid.get(uuid) {
+                    Some(m) => (unread || !m.read, mention || (!m.read && m.mentions_me)),
+                    None => (unread, mention),
+                }
+            })
+    }
 }

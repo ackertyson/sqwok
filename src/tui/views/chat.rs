@@ -215,28 +215,7 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane,
     }
 
     // Unread-above indicator: count unread rows hidden above the viewport.
-    let (unread_above, mention_above) =
-        rows[..scroll_offset]
-            .iter()
-            .fold((0usize, false), |(count, mention), r| match r {
-                RenderRow::Message {
-                    is_unread,
-                    mentions_me,
-                    ..
-                } => (
-                    count + *is_unread as usize,
-                    mention || (*is_unread && *mentions_me),
-                ),
-                RenderRow::CollapsedThread {
-                    is_unread,
-                    mentions_me,
-                    ..
-                } => (
-                    count + *is_unread as usize,
-                    mention || (*is_unread && *mentions_me),
-                ),
-                _ => (count, mention),
-            });
+    let (unread_above, mention_above) = count_unread_and_mentions(&rows[..scroll_offset]);
     if unread_above > 0 {
         let text = if mention_above {
             format!("↑ {} new*", unread_above)
@@ -255,28 +234,8 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane,
 
     // Unread-below indicator: count unread rows hidden below the viewport.
     if last_rendered_row + 1 < total_rows {
-        let (unread_below, mention_below) = rows[last_rendered_row + 1..].iter().fold(
-            (0usize, false),
-            |(count, mention), r| match r {
-                RenderRow::Message {
-                    is_unread,
-                    mentions_me,
-                    ..
-                } => (
-                    count + *is_unread as usize,
-                    mention || (*is_unread && *mentions_me),
-                ),
-                RenderRow::CollapsedThread {
-                    is_unread,
-                    mentions_me,
-                    ..
-                } => (
-                    count + *is_unread as usize,
-                    mention || (*is_unread && *mentions_me),
-                ),
-                _ => (count, mention),
-            },
-        );
+        let (unread_below, mention_below) =
+            count_unread_and_mentions(&rows[last_rendered_row + 1..]);
         if unread_below > 0 {
             let text = if mention_below {
                 format!("↓ {} new*", unread_below)
@@ -481,6 +440,63 @@ fn wrap_words(text: &str, first_width: usize, cont_width: usize) -> Vec<String> 
     lines
 }
 
+/// Count unread rows and whether any of them mention the current user.
+fn count_unread_and_mentions(rows: &[RenderRow]) -> (usize, bool) {
+    rows.iter().fold((0usize, false), |(count, mention), r| {
+        let (unread, is_mention) = match r {
+            RenderRow::Message {
+                is_unread,
+                mentions_me,
+                ..
+            } => (*is_unread, *is_unread && *mentions_me),
+            RenderRow::CollapsedThread {
+                is_unread,
+                mentions_me,
+                ..
+            } => (*is_unread, *is_unread && *mentions_me),
+            _ => (false, false),
+        };
+        (count + unread as usize, mention || is_mention)
+    })
+}
+
+/// Compute the primary background color for a row.
+fn row_bg(
+    is_selected: bool,
+    is_unread: bool,
+    mentions_me: bool,
+    highlighted: bool,
+) -> ratatui::style::Color {
+    if is_selected {
+        s::selection_bg()
+    } else if highlighted {
+        s::highlight_bg()
+    } else if is_unread && mentions_me {
+        s::mention_bg()
+    } else if is_unread {
+        s::unread_bg()
+    } else {
+        s::BG
+    }
+}
+
+/// Compute the trailing/fade background color for a row.
+fn row_trail_bg(
+    is_selected: bool,
+    show_unread_trail: bool,
+    mentions_me: bool,
+) -> ratatui::style::Color {
+    if is_selected {
+        s::selection_trail_bg()
+    } else if show_unread_trail && mentions_me {
+        s::mention_trail_bg()
+    } else if show_unread_trail {
+        s::unread_trail_bg()
+    } else {
+        s::BG
+    }
+}
+
 fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, avail_width: u16) {
     let bg = if is_selected {
         s::selection_bg()
@@ -539,17 +555,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             ..
         } => {
             let highlighted = highlight_age.map(|a| a.as_millis() < 1000).unwrap_or(false);
-            let actual_bg = if is_selected {
-                s::selection_bg()
-            } else if highlighted {
-                s::highlight_bg()
-            } else if *is_unread && *mentions_me {
-                s::mention_bg()
-            } else if *is_unread {
-                s::unread_bg()
-            } else {
-                s::BG
-            };
+            let actual_bg = row_bg(is_selected, *is_unread, *mentions_me, highlighted);
             let show_unread_trail = *is_unread && !is_selected && !highlighted;
 
             let indent_str = build_indent(*indent);
@@ -677,17 +683,12 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 lines.push(line.style(Style::default().bg(actual_bg)));
             }
 
-            let para_bg = if is_selected {
-                s::selection_trail_bg()
-            } else if show_unread_trail && *mentions_me {
-                s::mention_trail_bg()
-            } else if show_unread_trail {
-                s::unread_trail_bg()
-            } else {
-                actual_bg
-            };
             frame.render_widget(
-                Paragraph::new(lines).style(Style::default().bg(para_bg)),
+                Paragraph::new(lines).style(Style::default().bg(row_trail_bg(
+                    is_selected,
+                    show_unread_trail,
+                    *mentions_me,
+                ))),
                 area,
             );
         }
@@ -702,15 +703,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             mentions_me,
             ..
         } => {
-            let actual_bg = if is_selected {
-                s::selection_bg()
-            } else if *is_unread && *mentions_me {
-                s::mention_bg()
-            } else if *is_unread {
-                s::unread_bg()
-            } else {
-                s::BG
-            };
+            let actual_bg = row_bg(is_selected, *is_unread, *mentions_me, false);
             let show_unread_trail = *is_unread && !is_selected;
             let author_color = *author_color;
             let replies_tag = format!("[{} replies]", reply_count);
@@ -777,22 +770,17 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             } else {
                 Line::from(spans)
             };
-            let para_bg = if is_selected {
-                s::selection_trail_bg()
-            } else if show_unread_trail && *mentions_me {
-                s::mention_trail_bg()
-            } else if show_unread_trail {
-                s::unread_trail_bg()
-            } else {
-                actual_bg
-            };
             frame.render_widget(
-                Paragraph::new(line).style(Style::default().bg(para_bg)),
+                Paragraph::new(line).style(Style::default().bg(row_trail_bg(
+                    is_selected,
+                    show_unread_trail,
+                    *mentions_me,
+                ))),
                 area,
             );
         }
         RenderRow::Input {
-            thread_uuid,
+            thread_uuid: _,
             reply_to_uuid: _,
             indent,
             is_active,
@@ -802,15 +790,11 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             let indent_str = build_indent(*indent);
             let prompt_color = if *is_active { s::accent() } else { s::dim() };
             if !is_active {
-                let mut spans = vec![
+                let spans = vec![
                     Span::styled(indent_str, Style::default().fg(s::dim())),
                     Span::styled("❯ ", Style::default().fg(prompt_color)),
+                    Span::styled("message...", Style::default().fg(s::dim())),
                 ];
-                if thread_uuid.is_some() {
-                    spans.push(Span::styled("reply...", Style::default().fg(s::dim())));
-                } else {
-                    spans.push(Span::styled("message...", Style::default().fg(s::dim())));
-                }
                 frame.render_widget(
                     Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)),
                     area,

@@ -25,7 +25,7 @@ CLI usage: `sqwok` (interactive), `sqwok new "Topic" [--description "Desc"]` (cr
 
 1. self reliance: prefer self-rolled implementations over 3rd-party solutions
 2. simplicity: don't reach for complex solutions when a succinct approach will do the job *unless the additional complexity adds real value*
-3. UX is king: our UI should be snapy, elegant, intuitive and powerful
+3. UX is king: our UI should be snappy, elegant, intuitive and powerful
 
 ## Architecture
 
@@ -47,29 +47,53 @@ Each event mutates `AppState` (`tui/app.rs`, the central state object) and optio
   - AES-256-GCM message encryption with wire format: `[epoch:4B][nonce:12B][ciphertext+tag]`
   - Epoch-based group key management (`KeyChain`) with HKDF key derivation
   - Key bundles encrypted per-recipient via X25519 DH
-- **`identity/`** — Registration flow (email verification → RSA keypair → server-signed X.509 cert).
+- **`identity/`** — Registration flow: email verification → TOTP setup → RSA keypair → server-signed X.509 cert. Account recovery follows the same TOTP-gated path.
 - **`net/`** — WebSocket client with exponential backoff reconnection (1s→60s max), 30s heartbeat. Also HTTP endpoints for invites and user search.
 - **`storage/`** — SQLite persistence. Per-chat message DB at `~/.sqwok/chats/{uuid}/messages.db`. Global contact cache at `~/.sqwok/contacts.db`.
-- **`tui/`** — Ratatui-based terminal UI. `app.rs` (~1800 lines) holds all state. `input.rs` handles keyboard dispatch per mode/context. `views/` has individual view components (chat, chat_picker, command_bar, contacts, error_toast, group_settings, invite, member_list, modal, search).
+- **`tui/`** — Ratatui-based terminal UI. See TUI section below.
+
+### TUI Structure
+
+- **`app.rs`** (~1800 lines) — `AppState`: central state object, all inbound event handlers, business logic (send, navigate, expand/collapse threads, key exchange, etc.).
+- **`input.rs`** — Keyboard dispatch. Routes `crossterm` key events to `AppState` methods based on current mode/context (chat vs picker, editing vs navigating, modal active, etc.).
+- **`render.rs`** — Top-level frame layout: splits the terminal into top bar, pane area, bottom bar; handles multi-pane borders; dispatches to view components.
+- **`render_rows.rs`** — Builds the flat `Vec<RenderRow>` for a pane. `RenderRow` is the core display abstraction: a depth-aware enum (`Message`, `CollapsedThread`, `Input`, `TypingIndicator`) with an `indent: u8` field that drives visual nesting. All collapsed-group unread/mention status flows through `TuiMessageStore::unread_status`.
+- **`pane.rs`** — `Pane` struct (per-pane viewport state: selection, editing target, input buffers, expanded/collapsed sets). `InputTarget` enum (`MainChat`, `Thread(uuid)`, `Reply(reply_uuid, thread_uuid)`) with methods for converting to/from row fields.
+- **`store.rs`** — `TuiMessageStore`: in-memory display store. Holds `top_level` order, `by_uuid` map, and `threads` map. `unread_status(uuids)` is the single source of truth for collapsed-group highlight color decisions.
+- **`mention.rs`** — `@mention` parsing: `mentions_user`, `render_body` (wire tags → `@name`), `split_body_spans` (inline highlight segments), autocomplete query extraction.
+- **`style.rs`** — Color palette. All colors go through functions here; never hardcode colors elsewhere.
+- **`views/`** — Individual view components: `chat` (message list, top/bottom bars), `chat_picker`, `command_bar`, `contacts`, `error_toast`, `group_settings`, `invite`, `member_list`, `modal`, `search`.
 
 ### State Modes
 
-AppState operates in two modes: `ChatPicker` (chat list) and `Chat` (active conversation). Modals (member list, group settings, invite, search, contacts) overlay on top. The `Chat` mode supports multiple simultaneous panes (vertical or horizontal split) via `Vec<Pane>` with an `active_pane` index.
+`AppState` operates in two modes: `ChatPicker` (chat list) and `Chat` (active conversation). Modals (`MemberList`, `GroupSettings`, `InviteCreate`, `Search`, `Contacts`) overlay on top. `Chat` mode supports multiple simultaneous panes (vertical or horizontal split) via `Vec<Pane>` with an `active_pane` index.
+
+### Render Row Model
+
+`render_rows::build()` converts the message store into a flat list for rendering. The key design principle: all depth levels share the same `RenderRow::Message` / `RenderRow::Input` variants, differentiated only by `indent` (0 = top-level, 1 = thread reply, 2 = sub-reply). Adding a new depth level requires only: pushing messages with the appropriate `indent`, calling `push_depth_footer` with the right `InputTarget`, and extending `build_indent`/`indent_width` in `views/chat.rs`.
+
+`InputTarget` encodes which input field is active and can derive its own wire UUIDs (`to_wire_uuids`), indent depth (`indent`), and row-matching predicate (`matches_input_row`).
 
 ### Phoenix Channel Protocol
 
-Server communication uses Phoenix channel frames: `{"topic", "event", "ref", "join_ref", "payload"}`. Key inbound events: `msg:new`, `msg:buffered`, `member_list`, `presence_state`, `presence_diff`, `member:removed`, `key:request`, `key:distribute`, `typing:active`, `sync:push`, `sync:assign`, `chat:added`, `chat:removed`.
+Server communication uses Phoenix channel frames: `{"topic", "event", "ref", "join_ref", "payload"}`. Key inbound events: `msg:new`, `msg:buffered`, `member_list`, `presence_state`, `presence_diff`, `member:removed`, `key:request`, `key:distribute`, `typing:active`, `sync:push`, `sync:assign`, `sync:query`, `chat:added`, `chat:removed`.
 
 ## Environment Variables
 
-- `SQWOK_SERVER` — Server URL (default: `http://localhost:4000`)
+- `SQWOK_SERVER` — Server URL (default: `https://sqwok.fixbase.io`)
 
 ## File Paths at Runtime
 
-- `~/.sqwok/identity/` — E2E keys (Ed25519 private key)
-- `~/.local/share/sqwok/` — Registration credentials (RSA key, X.509 cert)
-- `~/.sqwok/chats/{uuid}/messages.db` — Per-chat SQLite
-- `~/.sqwok/contacts.db` — Contact cache
+All identity and credential files are co-located under `~/.sqwok/identity/`:
+- `private_key.pem` — RSA private key (auth)
+- `cert.pem`, `ca.pem` — Server-signed X.509 cert (auth)
+- `user_uuid` — Registered user UUID
+- `screenname` — Display name
+- `e2e_private.key` — Ed25519 private key (E2E encryption)
+
+Other paths:
+- `~/.sqwok/chats/{uuid}/messages.db` — Per-chat SQLite message store
+- `~/.sqwok/contacts.db` — Contact/screenname cache
 - `~/.sqwok/debug.log` — Debug output (written by `dlog!` macro)
 
 ## Patterns

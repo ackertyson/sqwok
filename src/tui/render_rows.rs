@@ -117,25 +117,9 @@ pub fn build(
                 .iter()
                 .any(|(t, _)| t.as_deref() == Some(top_uuid.as_str()));
             let thread_replies = msg_store.threads.get(top_uuid);
-            let has_unread_replies = thread_replies
-                .map(|replies| {
-                    replies
-                        .iter()
-                        .any(|r| msg_store.by_uuid.get(r).map(|m| !m.read).unwrap_or(false))
-                })
-                .unwrap_or(false);
-            let has_mention_in_thread = msg.mentions_me
-                || thread_replies
-                    .map(|replies| {
-                        replies.iter().any(|r| {
-                            msg_store
-                                .by_uuid
-                                .get(r)
-                                .map(|m| m.mentions_me)
-                                .unwrap_or(false)
-                        })
-                    })
-                    .unwrap_or(false);
+            let (replies_unread, replies_mention) = msg_store.unread_status(
+                thread_replies.into_iter().flatten().map(String::as_str),
+            );
             rows.push(RenderRow::CollapsedThread {
                 uuid: top_uuid.clone(),
                 author: display_name(&msg.sender_uuid, &msg.sender_name),
@@ -144,8 +128,8 @@ pub fn build(
                 reply_count,
                 timestamp: format_timestamp(&msg.timestamp),
                 typing_active,
-                is_unread: !msg.read || has_unread_replies,
-                mentions_me: has_mention_in_thread,
+                is_unread: !msg.read || replies_unread,
+                mentions_me: (!msg.read && msg.mentions_me) || replies_mention,
             });
         } else {
             let top_gutter = if reply_count > 0 {
@@ -190,63 +174,37 @@ pub fn build(
                         Some(m) => m,
                         None => continue,
                     };
-                    let collapsed_sub_count = if pane.collapsed_subs.contains(reply_uuid.as_str()) {
-                        Some(
-                            d2_uuids
-                                .iter()
-                                .filter(|u| {
-                                    msg_store
-                                        .by_uuid
-                                        .get(u.as_str())
-                                        .map(|m| {
-                                            m.reply_to_uuid.as_deref() == Some(reply_uuid.as_str())
-                                        })
-                                        .unwrap_or(false)
-                                })
-                                .count(),
-                        )
-                    } else {
-                        None
-                    };
+
+                    // Collect d2 replies belonging to this d1 message once; reuse below.
+                    let d2_for_reply: Vec<&String> = d2_uuids
+                        .iter()
+                        .copied()
+                        .filter(|u| {
+                            msg_store
+                                .by_uuid
+                                .get(u.as_str())
+                                .map(|m| m.reply_to_uuid.as_deref() == Some(reply_uuid.as_str()))
+                                .unwrap_or(false)
+                        })
+                        .collect();
+
+                    let is_sub_collapsed = pane.collapsed_subs.contains(reply_uuid.as_str());
+                    let collapsed_sub_count = is_sub_collapsed.then_some(d2_for_reply.len());
                     let sub_typing_active = typing_indicators
                         .iter()
                         .any(|(_, r)| r.as_deref() == Some(reply_uuid.as_str()));
-                    let has_sub_replies = d2_uuids.iter().any(|u| {
-                        msg_store
-                            .by_uuid
-                            .get(u.as_str())
-                            .map(|m| m.reply_to_uuid.as_deref() == Some(reply_uuid.as_str()))
-                            .unwrap_or(false)
-                    });
-                    let d1_gutter = if collapsed_sub_count.is_some() {
+                    let d1_gutter = if is_sub_collapsed {
                         Gutter::Collapsed
-                    } else if has_sub_replies {
+                    } else if !d2_for_reply.is_empty() {
                         Gutter::Expanded
                     } else {
                         Gutter::None
                     };
-                    let has_unread_collapsed_subs = collapsed_sub_count.is_some()
-                        && d2_uuids.iter().any(|u| {
-                            msg_store
-                                .by_uuid
-                                .get(u.as_str())
-                                .map(|m| {
-                                    m.reply_to_uuid.as_deref() == Some(reply_uuid.as_str())
-                                        && !m.read
-                                })
-                                .unwrap_or(false)
-                        });
-                    let has_mention_in_collapsed_subs = collapsed_sub_count.is_some()
-                        && d2_uuids.iter().any(|u| {
-                            msg_store
-                                .by_uuid
-                                .get(u.as_str())
-                                .map(|m| {
-                                    m.reply_to_uuid.as_deref() == Some(reply_uuid.as_str())
-                                        && m.mentions_me
-                                })
-                                .unwrap_or(false)
-                        });
+                    let (subs_unread, subs_mention) = if is_sub_collapsed {
+                        msg_store.unread_status(d2_for_reply.iter().map(|u| u.as_str()))
+                    } else {
+                        (false, false)
+                    };
                     rows.push(RenderRow::Message {
                         uuid: reply_uuid.to_string(),
                         author: display_name(&reply.sender_uuid, &reply.sender_name),
@@ -261,21 +219,18 @@ pub fn build(
                         collapsed_sub_count,
                         sub_typing_active,
                         gutter: d1_gutter,
-                        is_unread: !reply.read || has_unread_collapsed_subs,
-                        mentions_me: reply.mentions_me || has_mention_in_collapsed_subs,
+                        is_unread: !reply.read || subs_unread,
+                        mentions_me: (!reply.read && reply.mentions_me) || subs_mention,
                         mentioned_names: reply.mentioned_names.clone(),
                     });
 
                     // Depth-2 replies — only shown when the subthread is not collapsed.
-                    if !pane.collapsed_subs.contains(reply_uuid.as_str()) {
-                        for sub_uuid in d2_uuids.iter() {
-                            let sub = match msg_store.by_uuid.get(*sub_uuid) {
+                    if !is_sub_collapsed {
+                        for sub_uuid in d2_for_reply.iter() {
+                            let sub = match msg_store.by_uuid.get(sub_uuid.as_str()) {
                                 Some(m) => m,
                                 None => continue,
                             };
-                            if sub.reply_to_uuid.as_deref() != Some(reply_uuid.as_str()) {
-                                continue;
-                            }
                             rows.push(RenderRow::Message {
                                 uuid: sub_uuid.to_string(),
                                 author: display_name(&sub.sender_uuid, &sub.sender_name),
@@ -286,7 +241,7 @@ pub fn build(
                                 thread_uuid: Some(top_uuid.clone()),
                                 reply_to_uuid: sub.reply_to_uuid.clone(),
                                 is_pending: sub.pending,
-                                highlight_age: highlights.get(*sub_uuid).map(|i| i.elapsed()),
+                                highlight_age: highlights.get(sub_uuid.as_str()).map(|i| i.elapsed()),
                                 collapsed_sub_count: None,
                                 sub_typing_active: false,
                                 gutter: Gutter::None,
@@ -296,93 +251,78 @@ pub fn build(
                             });
                         }
 
-                        // Depth-2 typing indicator (before the reply input)
-                        if typing_indicators
-                            .contains(&(Some(top_uuid.clone()), Some(reply_uuid.to_string())))
-                        {
-                            rows.push(RenderRow::TypingIndicator { indent: 2 });
-                        }
-
-                        // Inline depth-2 reply input if active for this depth-1 message
-                        let reply_target =
-                            InputTarget::Reply(reply_uuid.to_string(), top_uuid.clone());
-                        if pane.editing.as_ref() == Some(&reply_target) {
-                            let content =
-                                pane.inputs.get(&reply_target).cloned().unwrap_or_default();
-                            let cursor = pane
-                                .cursor_positions
-                                .get(&reply_target)
-                                .copied()
-                                .unwrap_or(content.chars().count());
-                            rows.push(RenderRow::Input {
-                                thread_uuid: Some(top_uuid.clone()),
-                                reply_to_uuid: Some(reply_uuid.to_string()),
-                                indent: 2,
-                                is_active: true,
-                                content,
-                                cursor,
-                            });
-                        }
+                        // Depth-2 footer: typing indicator + reply input (active-only)
+                        push_depth_footer(
+                            &mut rows,
+                            pane,
+                            InputTarget::Reply(reply_uuid.to_string(), top_uuid.clone()),
+                            &(Some(top_uuid.clone()), Some(reply_uuid.to_string())),
+                            typing_indicators,
+                            true,
+                        );
                     }
                 }
 
-                // Depth-1 typing indicator (before the thread input)
-                if typing_indicators.contains(&(Some(top_uuid.clone()), None)) {
-                    rows.push(RenderRow::TypingIndicator { indent: 1 });
-                }
-
-                // Thread input prompt at depth-1
-                let thread_input_target = InputTarget::Thread(top_uuid.clone());
-                let is_editing = pane.editing.as_ref() == Some(&thread_input_target);
-                let content = pane
-                    .inputs
-                    .get(&thread_input_target)
-                    .cloned()
-                    .unwrap_or_default();
-                let cursor = pane
-                    .cursor_positions
-                    .get(&thread_input_target)
-                    .copied()
-                    .unwrap_or(content.chars().count());
-                rows.push(RenderRow::Input {
-                    thread_uuid: Some(top_uuid.clone()),
-                    reply_to_uuid: None,
-                    indent: 1,
-                    is_active: is_editing,
-                    content,
-                    cursor,
-                });
+                // Depth-1 footer: typing indicator + thread input
+                push_depth_footer(
+                    &mut rows,
+                    pane,
+                    InputTarget::Thread(top_uuid.clone()),
+                    &(Some(top_uuid.clone()), None),
+                    typing_indicators,
+                    false,
+                );
             }
         }
     }
 
-    // Top-level typing indicator (before main chat input)
-    if typing_indicators.contains(&(None, None)) {
-        rows.push(RenderRow::TypingIndicator { indent: 0 });
-    }
-
-    // Main chat input at bottom
-    let is_editing_main = pane.editing.as_ref() == Some(&InputTarget::MainChat);
-    let main_content = pane
-        .inputs
-        .get(&InputTarget::MainChat)
-        .cloned()
-        .unwrap_or_default();
-    let main_cursor = pane
-        .cursor_positions
-        .get(&InputTarget::MainChat)
-        .copied()
-        .unwrap_or(main_content.chars().count());
-    rows.push(RenderRow::Input {
-        thread_uuid: None,
-        reply_to_uuid: None,
-        indent: 0,
-        is_active: is_editing_main,
-        content: main_content,
-        cursor: main_cursor,
-    });
+    // Depth-0 footer: typing indicator + main chat input
+    push_depth_footer(&mut rows, pane, InputTarget::MainChat, &(None, None), typing_indicators, false);
 
     rows
+}
+
+/// Append an Input row for `target` to `rows`. The thread/reply UUIDs and
+/// indent are derived from the target itself. When `only_when_active` is true
+/// the row is only appended if the pane is currently editing that target
+/// (used for depth-2 inline reply inputs).
+fn push_input_row(rows: &mut Vec<RenderRow>, pane: &Pane, target: InputTarget, only_when_active: bool) {
+    let is_active = pane.editing.as_ref() == Some(&target);
+    if only_when_active && !is_active {
+        return;
+    }
+    let indent = target.indent();
+    let (thread_uuid, reply_to_uuid) = target.to_wire_uuids();
+    let content = pane.inputs.get(&target).cloned().unwrap_or_default();
+    let cursor = pane
+        .cursor_positions
+        .get(&target)
+        .copied()
+        .unwrap_or(content.chars().count());
+    rows.push(RenderRow::Input {
+        thread_uuid,
+        reply_to_uuid,
+        indent,
+        is_active,
+        content,
+        cursor,
+    });
+}
+
+/// Append a TypingIndicator (if active) followed by an Input row for `target`.
+/// This is the standard footer for every depth level.
+fn push_depth_footer(
+    rows: &mut Vec<RenderRow>,
+    pane: &Pane,
+    target: InputTarget,
+    typing_key: &(Option<String>, Option<String>),
+    typing_indicators: &HashSet<(Option<String>, Option<String>)>,
+    only_input_when_active: bool,
+) {
+    if typing_indicators.contains(typing_key) {
+        rows.push(RenderRow::TypingIndicator { indent: target.indent() });
+    }
+    push_input_row(rows, pane, target, only_input_when_active);
 }
 
 fn format_timestamp(ts: &str) -> String {

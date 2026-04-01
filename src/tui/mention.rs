@@ -187,11 +187,14 @@ mod tests {
     fn test_split_body_spans_slash_in_name() {
         let names = vec!["foo/bar".to_string()];
         let spans = split_body_spans("hey @foo/bar!", &names);
-        assert_eq!(spans, vec![
-            ("hey ".to_string(), false),
-            ("@foo/bar".to_string(), true),
-            ("!".to_string(), false),
-        ]);
+        assert_eq!(
+            spans,
+            vec![
+                ("hey ".to_string(), false),
+                ("@foo/bar".to_string(), true),
+                ("!".to_string(), false),
+            ]
+        );
     }
 
     #[test]

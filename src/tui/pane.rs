@@ -7,6 +7,55 @@ pub enum InputTarget {
     Reply(String, String), // (reply_to_uuid, thread_root_uuid)
 }
 
+impl InputTarget {
+    /// Convert a (thread_uuid, reply_to_uuid) pair from a render row into an InputTarget.
+    pub fn from_uuids(thread_uuid: Option<&String>, reply_to_uuid: Option<&String>) -> Self {
+        match (thread_uuid, reply_to_uuid) {
+            (Some(thread), Some(reply)) => InputTarget::Reply(reply.clone(), thread.clone()),
+            (Some(t), None) => InputTarget::Thread(t.clone()),
+            _ => InputTarget::MainChat,
+        }
+    }
+
+    /// Check whether this target corresponds to the given Input row's uuid fields.
+    pub fn matches_input_row(
+        &self,
+        thread_uuid: &Option<String>,
+        reply_to_uuid: &Option<String>,
+    ) -> bool {
+        match self {
+            InputTarget::MainChat => thread_uuid.is_none() && reply_to_uuid.is_none(),
+            InputTarget::Thread(root) => {
+                thread_uuid.as_deref() == Some(root.as_str()) && reply_to_uuid.is_none()
+            }
+            InputTarget::Reply(reply_uuid, thread) => {
+                thread_uuid.as_deref() == Some(thread.as_str())
+                    && reply_to_uuid.as_deref() == Some(reply_uuid.as_str())
+            }
+        }
+    }
+
+    /// Extract the (thread_uuid, reply_to_uuid) wire fields for this target.
+    pub fn to_wire_uuids(&self) -> (Option<String>, Option<String>) {
+        match self {
+            InputTarget::MainChat => (None, None),
+            InputTarget::Thread(root) => (Some(root.clone()), None),
+            InputTarget::Reply(reply_uuid, thread) => {
+                (Some(thread.clone()), Some(reply_uuid.clone()))
+            }
+        }
+    }
+
+    /// The visual indent depth for the input row at this target.
+    pub fn indent(&self) -> u8 {
+        match self {
+            InputTarget::MainChat => 0,
+            InputTarget::Thread(_) => 1,
+            InputTarget::Reply(_, _) => 2,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Pane {
     /// Index of selected render row
