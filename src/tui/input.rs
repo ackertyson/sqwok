@@ -223,6 +223,40 @@ fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
                 app.jump_to_latest();
                 Action::Continue
             }
+            KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => {
+                app.mention_popup = None;
+                app.active_pane_mut().move_cursor_to_start();
+                Action::Continue
+            }
+            KeyCode::Char('e') if key.modifiers == KeyModifiers::CONTROL => {
+                app.mention_popup = None;
+                app.active_pane_mut().move_cursor_to_end();
+                Action::Continue
+            }
+            KeyCode::Char('b') if key.modifiers == KeyModifiers::ALT => {
+                app.mention_popup = None;
+                app.active_pane_mut().move_cursor_word_back();
+                Action::Continue
+            }
+            KeyCode::Char('f') if key.modifiers == KeyModifiers::ALT => {
+                app.mention_popup = None;
+                app.active_pane_mut().move_cursor_word_forward();
+                Action::Continue
+            }
+            KeyCode::Backspace if key.modifiers == KeyModifiers::ALT => {
+                app.mention_popup = None;
+                app.active_pane_mut().delete_word_back();
+                Action::Continue
+            }
+            KeyCode::Char('d') if key.modifiers == KeyModifiers::CONTROL => {
+                app.active_pane_mut().pop_char_forward();
+                Action::Continue
+            }
+            KeyCode::Char('d') if key.modifiers == KeyModifiers::ALT => {
+                app.mention_popup = None;
+                app.active_pane_mut().delete_word_forward();
+                Action::Continue
+            }
             KeyCode::Char(c)
                 if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
             {

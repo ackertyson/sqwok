@@ -137,6 +137,113 @@ impl Pane {
         }
     }
 
+    pub fn move_cursor_to_start(&mut self) {
+        if let Some(target) = self.editing.as_ref() {
+            let pos = self.cursor_positions.entry(target.clone()).or_insert(0);
+            *pos = 0;
+        }
+    }
+
+    pub fn move_cursor_to_end(&mut self) {
+        if let Some(target) = self.editing.as_ref() {
+            let len = self.inputs.get(target).map(|s| s.chars().count()).unwrap_or(0);
+            let pos = self.cursor_positions.entry(target.clone()).or_insert(len);
+            *pos = len;
+        }
+    }
+
+    pub fn move_cursor_word_back(&mut self) {
+        let Some(target) = self.editing.clone() else { return };
+        let chars: Vec<char> = self.inputs.get(&target).map(|s| s.chars().collect()).unwrap_or_default();
+        let len = chars.len();
+        let cursor = self.cursor_positions.entry(target).or_insert(len);
+        while *cursor > 0 && !chars[*cursor - 1].is_alphanumeric() {
+            *cursor -= 1;
+        }
+        while *cursor > 0 && chars[*cursor - 1].is_alphanumeric() {
+            *cursor -= 1;
+        }
+    }
+
+    pub fn move_cursor_word_forward(&mut self) {
+        let Some(target) = self.editing.clone() else { return };
+        let chars: Vec<char> = self.inputs.get(&target).map(|s| s.chars().collect()).unwrap_or_default();
+        let len = chars.len();
+        let cursor = self.cursor_positions.entry(target).or_insert(len);
+        while *cursor < len && !chars[*cursor].is_alphanumeric() {
+            *cursor += 1;
+        }
+        while *cursor < len && chars[*cursor].is_alphanumeric() {
+            *cursor += 1;
+        }
+    }
+
+    pub fn delete_word_back(&mut self) {
+        let Some(target) = self.editing.clone() else { return };
+        let chars: Vec<char> = self.inputs.get(&target).map(|s| s.chars().collect()).unwrap_or_default();
+        let len = chars.len();
+        let end = self.cursor_positions.get(&target).copied().unwrap_or(len);
+        let mut new_pos = end;
+        while new_pos > 0 && !chars[new_pos - 1].is_alphanumeric() {
+            new_pos -= 1;
+        }
+        while new_pos > 0 && chars[new_pos - 1].is_alphanumeric() {
+            new_pos -= 1;
+        }
+        // Also eat any whitespace before the word so it travels with the word.
+        while new_pos > 0 && !chars[new_pos - 1].is_alphanumeric() {
+            new_pos -= 1;
+        }
+        if new_pos == end {
+            return;
+        }
+        let byte_start: usize = chars[..new_pos].iter().map(|c| c.len_utf8()).sum();
+        let byte_end: usize = chars[..end].iter().map(|c| c.len_utf8()).sum();
+        if let Some(s) = self.inputs.get_mut(&target) {
+            s.drain(byte_start..byte_end);
+        }
+        self.cursor_positions.insert(target, new_pos);
+    }
+
+    pub fn delete_word_forward(&mut self) {
+        let Some(target) = self.editing.clone() else { return };
+        let chars: Vec<char> = self.inputs.get(&target).map(|s| s.chars().collect()).unwrap_or_default();
+        let len = chars.len();
+        let start = self.cursor_positions.get(&target).copied().unwrap_or(len);
+        let mut end = start;
+        while end < len && !chars[end].is_alphanumeric() {
+            end += 1;
+        }
+        while end < len && chars[end].is_alphanumeric() {
+            end += 1;
+        }
+        if end == start {
+            return;
+        }
+        let byte_start: usize = chars[..start].iter().map(|c| c.len_utf8()).sum();
+        let byte_end: usize = chars[..end].iter().map(|c| c.len_utf8()).sum();
+        if let Some(s) = self.inputs.get_mut(&target) {
+            s.drain(byte_start..byte_end);
+        }
+    }
+
+    pub fn pop_char_forward(&mut self) {
+        if let Some(target) = self.editing.clone() {
+            if let Some(s) = self.inputs.get_mut(&target) {
+                let len = s.chars().count();
+                let cursor = self.cursor_positions.entry(target).or_insert(len);
+                if *cursor < len {
+                    let byte_idx = s
+                        .char_indices()
+                        .nth(*cursor)
+                        .map(|(i, _)| i)
+                        .unwrap_or(s.len());
+                    s.remove(byte_idx);
+                }
+            }
+        }
+    }
+
     pub fn move_cursor_left(&mut self) {
         if let Some(target) = self.editing.as_ref() {
             let len = self

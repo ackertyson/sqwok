@@ -196,8 +196,10 @@ fn display_totp_prompt(totp_uri: &str) {
     let secret =
         extract_totp_secret(totp_uri).unwrap_or_else(|| "(could not extract secret)".to_string());
 
+    const YELLOW: &str = "\x1b[33m";
+    const R: &str = "\x1b[0m";
     println!("┌─────────────────────────────────────────────────────────────┐");
-    println!("│  !! ALREADY HAVE SQWOK IN YOUR AUTHENTICATOR APP? !!        │");
+    println!("│  {YELLOW}!! ALREADY HAVE SQWOK IN YOUR AUTHENTICATOR APP? !!{R}        │");
     println!("│  Skip the QR code — just enter your existing 6-digit code.  │");
     println!("│  Re-scanning will break your account access.                │");
     println!("├─────────────────────────────────────────────────────────────┤");
@@ -315,7 +317,7 @@ async fn complete_registration(
 
 fn prompt_totp_code() -> Result<String> {
     let code: String = dialoguer::Input::new()
-        .with_prompt("Enter 6-digit authenticator code")
+        .with_prompt("\x1b[96mEnter 6-digit authenticator code\x1b[0m")
         .validate_with(|s: &String| -> Result<(), &str> {
             if s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()) {
                 Ok(())
