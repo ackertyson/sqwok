@@ -126,6 +126,14 @@ pub fn highlight_bg() -> Color {
     color((40, 40, 65), 236)
 }
 #[inline]
+pub fn pane_icon_bg() -> Color {
+    color((62, 62, 95), 238)
+}
+#[inline]
+pub fn pane_icon_fg() -> Color {
+    color((130, 130, 155), 102)
+}
+#[inline]
 pub fn unread_bg() -> Color {
     color((0, 22, 18), 237)
 }

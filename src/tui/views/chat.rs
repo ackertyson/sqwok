@@ -79,18 +79,29 @@ pub fn draw_bottom_bar(frame: &mut Frame, area: Rect) {
         ),
         Span::raw("  "),
     ];
-    let hint = s::hint_line(&[
+    let hint1 = s::hint_line(&[
         ("↑↓", "nav"),
         ("Enter", "new msg"),
         ("Esc", "cancel input"),
         ("→/←", "thread show/hide"),
         ("/", "cmd"),
-        ("Alt+\\", "vpane"),
-        ("Alt+-", "hpane"),
-        ("Alt+w", "close pane"),
-        ("Ctrl+c", "quit"),
     ]);
-    status_spans.extend(hint.spans);
+    status_spans.extend(hint1.spans);
+
+    let icon_style = Style::default().fg(s::pane_icon_fg()).bg(s::pane_icon_bg());
+    for (key, icon) in [("Alt+\\", "▕▏"), ("Alt+-", "──")] {
+        status_spans.push(Span::raw("  "));
+        status_spans.push(Span::styled(
+            key.to_string(),
+            Style::default().fg(s::shortcut_key_color()),
+        ));
+        status_spans.push(Span::raw(" "));
+        status_spans.push(Span::styled(icon.to_string(), icon_style));
+    }
+
+    status_spans.push(Span::raw("  "));
+    let hint2 = s::hint_line(&[("Alt+w", "close pane"), ("Ctrl+c", "quit")]);
+    status_spans.extend(hint2.spans);
     frame.render_widget(Paragraph::new(Line::from(status_spans)), area);
 }
 
