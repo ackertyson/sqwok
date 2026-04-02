@@ -1,6 +1,6 @@
 [package]
 name = "sqwok"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 
 [[bin]]
@@ -9,8 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
-reqwest = { version = "0.12", features = ["json", "native-tls", "blocking"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
 rcgen = { version = "0.13", features = ["aws_lc_rs", "pem"], default-features = false }
 ring = "0.17"
 x509-parser = "0.16"
