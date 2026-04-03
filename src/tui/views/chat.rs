@@ -89,7 +89,7 @@ pub fn draw_bottom_bar(frame: &mut Frame, area: Rect) {
     status_spans.extend(hint1.spans);
 
     let icon_style = Style::default().fg(s::pane_icon_fg()).bg(s::pane_icon_bg());
-    for (key, icon) in [("Alt+\\", "▕▏"), ("Alt+-", "──")] {
+    for (key, icon) in [("Alt+\\", "▕▏"), ("Alt+-", "──"), ("Alt+w", "  ")] {
         status_spans.push(Span::raw("  "));
         status_spans.push(Span::styled(
             key.to_string(),
@@ -100,7 +100,7 @@ pub fn draw_bottom_bar(frame: &mut Frame, area: Rect) {
     }
 
     status_spans.push(Span::raw("  "));
-    let hint2 = s::hint_line(&[("Alt+w", "close pane"), ("Ctrl+c", "quit")]);
+    let hint2 = s::hint_line(&[("Ctrl+c", "quit")]);
     status_spans.extend(hint2.spans);
     frame.render_widget(Paragraph::new(Line::from(status_spans)), area);
 }
