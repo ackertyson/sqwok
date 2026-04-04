@@ -63,7 +63,11 @@ impl ChatCrypto {
     pub fn encrypt(&self, sender_uuid: &Uuid, plaintext: &str) -> Result<(String, u32)> {
         let wire = message::encrypt_message(&self.keychain, sender_uuid, plaintext.as_bytes())?;
         let b64 = B64.encode(&wire);
-        Ok((b64, self.keychain.current_epoch()))
+        let epoch = self
+            .keychain
+            .current_epoch()
+            .ok_or_else(|| anyhow::anyhow!("no keys in keychain"))?;
+        Ok((b64, epoch))
     }
 
     /// Decrypt a message from its base64 ciphertext field.
@@ -73,7 +77,7 @@ impl ChatCrypto {
         Ok(String::from_utf8(plaintext)?)
     }
 
-    pub fn current_epoch(&self) -> u32 {
+    pub fn current_epoch(&self) -> Option<u32> {
         self.keychain.current_epoch()
     }
 
@@ -84,10 +88,14 @@ impl ChatCrypto {
         recipient_x25519: &X25519PublicKey,
         all_epochs: bool,
     ) -> Result<EncryptedKeyBundle> {
+        let current = self
+            .keychain
+            .current_key()
+            .ok_or_else(|| anyhow::anyhow!("cannot prepare key bundle: keychain is empty"))?;
         let epochs = if all_epochs {
             self.keychain.all_epochs()
         } else {
-            std::slice::from_ref(self.keychain.current_key().unwrap())
+            std::slice::from_ref(current)
         };
         encrypt_key_bundle(&self.identity, recipient_x25519, epochs)
     }

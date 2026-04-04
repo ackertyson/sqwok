@@ -4,7 +4,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha512};
 use std::path::Path;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Holds both the Ed25519 identity key and derived X25519 key.
 pub struct E2eIdentity {
@@ -25,8 +25,10 @@ impl E2eIdentity {
 
         // Derive X25519 secret from Ed25519 seed via SHA-512, matching libsodium's
         // crypto_sign_ed25519_sk_to_curve25519.
-        let hash = Sha512::digest(seed);
-        let mut x25519_bytes: [u8; 32] = hash[..32].try_into().unwrap();
+        let hash_output = Sha512::digest(seed);
+        let mut hash_bytes = Zeroizing::new([0u8; 64]);
+        hash_bytes.copy_from_slice(&hash_output);
+        let mut x25519_bytes: [u8; 32] = hash_bytes[..32].try_into().unwrap();
         x25519_bytes[0] &= 248;
         x25519_bytes[31] &= 127;
         x25519_bytes[31] |= 64;

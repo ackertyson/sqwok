@@ -1,7 +1,7 @@
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use anyhow::Result;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use hkdf::Hkdf;
 use rand::{rngs::OsRng, RngCore};
 use sha2::Sha256;
@@ -20,8 +20,26 @@ pub struct EncryptedKeyBundle {
 }
 
 /// Derive a wrapping key from a DH shared secret using HKDF-SHA256.
-fn derive_wrapping_key(shared_secret: &[u8; 32], info: &[u8]) -> Key<Aes256Gcm> {
-    let hk = Hkdf::<Sha256>::new(None, shared_secret);
+/// Salt is the sorted concatenation of both parties' X25519 public keys,
+/// ensuring the derived key is unique per sender-recipient pair regardless
+/// of who initiates.
+fn derive_wrapping_key(
+    shared_secret: &[u8; 32],
+    our_public: &X25519PublicKey,
+    their_public: &X25519PublicKey,
+    info: &[u8],
+) -> Key<Aes256Gcm> {
+    let a = our_public.as_bytes();
+    let b = their_public.as_bytes();
+    let mut salt = [0u8; 64];
+    if a < b {
+        salt[..32].copy_from_slice(a);
+        salt[32..].copy_from_slice(b);
+    } else {
+        salt[..32].copy_from_slice(b);
+        salt[32..].copy_from_slice(a);
+    }
+    let hk = Hkdf::<Sha256>::new(Some(&salt), shared_secret);
     let mut okm = [0u8; 32];
     hk.expand(info, &mut okm)
         .expect("32 bytes is a valid length for HKDF-SHA256");
@@ -38,7 +56,13 @@ pub fn encrypt_key_bundle(
     epoch_keys: &[EpochKey],
 ) -> Result<EncryptedKeyBundle> {
     let shared_secret = identity.dh(recipient_x25519);
-    let wrapping_key = derive_wrapping_key(&shared_secret, b"sqwok-key-wrap-v1");
+    let our_public = identity.x25519_public();
+    let wrapping_key = derive_wrapping_key(
+        &shared_secret,
+        &our_public,
+        recipient_x25519,
+        b"sqwok-key-wrap-v1",
+    );
     let cipher = Aes256Gcm::new(&wrapping_key);
 
     let mut epochs = Vec::with_capacity(epoch_keys.len());
@@ -49,8 +73,16 @@ pub fn encrypt_key_bundle(
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
+        // Bind epoch number as AAD so ciphertext is self-authenticating
+        let aad = ek.epoch.to_le_bytes();
         let ciphertext = cipher
-            .encrypt(nonce, ek.key.as_ref())
+            .encrypt(
+                nonce,
+                Payload {
+                    msg: ek.key.as_ref(),
+                    aad: &aad,
+                },
+            )
             .map_err(|e| anyhow::anyhow!("AES-GCM encrypt failed: {}", e))?;
 
         let mut blob = Vec::with_capacity(12 + ciphertext.len());
@@ -90,12 +122,18 @@ pub fn decrypt_key_bundle(
         .map_err(|_| anyhow::anyhow!("invalid signature length"))?;
     let signature = Signature::from_bytes(&sig_bytes);
     sender_ed25519
-        .verify(&sign_payload, &signature)
+        .verify_strict(&sign_payload, &signature)
         .map_err(|_| anyhow::anyhow!("key bundle signature verification failed"))?;
 
     // Decrypt each epoch
     let shared_secret = identity.dh(sender_x25519);
-    let wrapping_key = derive_wrapping_key(&shared_secret, b"sqwok-key-wrap-v1");
+    let our_public = identity.x25519_public();
+    let wrapping_key = derive_wrapping_key(
+        &shared_secret,
+        &our_public,
+        sender_x25519,
+        b"sqwok-key-wrap-v1",
+    );
     let cipher = Aes256Gcm::new(&wrapping_key);
 
     let mut epoch_keys = Vec::with_capacity(bundle.epochs.len());
@@ -104,8 +142,15 @@ pub fn decrypt_key_bundle(
             anyhow::bail!("encrypted key blob too short for epoch {}", epoch);
         }
         let nonce = Nonce::from_slice(&blob[..12]);
+        let aad = epoch.to_le_bytes();
         let plaintext = cipher
-            .decrypt(nonce, &blob[12..])
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: &blob[12..],
+                    aad: &aad,
+                },
+            )
             .map_err(|_| anyhow::anyhow!("AES-GCM decrypt failed for epoch {}", epoch))?;
         if plaintext.len() != 32 {
             anyhow::bail!(
@@ -254,6 +299,198 @@ mod tests {
         )
         .unwrap();
         assert!(decrypted.is_empty());
+
+        let _ = std::fs::remove_dir_all(a_dir);
+        let _ = std::fs::remove_dir_all(b_dir);
+    }
+
+    #[test]
+    fn test_tampered_epoch_blob_fails() {
+        let (alice, a_dir) = make_test_identity();
+        let (bob, b_dir) = make_test_identity();
+        let kc = KeyChain::generate_new();
+
+        let mut bundle = encrypt_key_bundle(&alice, &bob.x25519_public(), kc.all_epochs()).unwrap();
+        // Flip a bit in the encrypted key blob
+        bundle.epochs[0].1[15] ^= 0x01;
+
+        // Signature is over the original blob, so signature check fails
+        let result = decrypt_key_bundle(
+            &bob,
+            &alice.x25519_public(),
+            &alice.verifying_key(),
+            &bundle,
+        );
+        assert!(result.is_err(), "tampered blob must be detected");
+
+        let _ = std::fs::remove_dir_all(a_dir);
+        let _ = std::fs::remove_dir_all(b_dir);
+    }
+
+    #[test]
+    fn test_reordered_epochs_fails_signature() {
+        let (alice, a_dir) = make_test_identity();
+        let (bob, b_dir) = make_test_identity();
+        let mut kc = KeyChain::generate_new();
+        kc.rotate();
+
+        let mut bundle = encrypt_key_bundle(&alice, &bob.x25519_public(), kc.all_epochs()).unwrap();
+        // Swap the two epoch entries
+        bundle.epochs.swap(0, 1);
+
+        let result = decrypt_key_bundle(
+            &bob,
+            &alice.x25519_public(),
+            &alice.verifying_key(),
+            &bundle,
+        );
+        assert!(
+            result.is_err(),
+            "reordering epochs must invalidate the signature"
+        );
+
+        let _ = std::fs::remove_dir_all(a_dir);
+        let _ = std::fs::remove_dir_all(b_dir);
+    }
+
+    #[test]
+    fn test_tampered_signature_fails() {
+        let (alice, a_dir) = make_test_identity();
+        let (bob, b_dir) = make_test_identity();
+        let kc = KeyChain::generate_new();
+
+        let mut bundle = encrypt_key_bundle(&alice, &bob.x25519_public(), kc.all_epochs()).unwrap();
+        // Corrupt the signature
+        bundle.signature[0] ^= 0xFF;
+
+        let result = decrypt_key_bundle(
+            &bob,
+            &alice.x25519_public(),
+            &alice.verifying_key(),
+            &bundle,
+        );
+        assert!(
+            result.is_err(),
+            "corrupted signature must fail verification"
+        );
+
+        let _ = std::fs::remove_dir_all(a_dir);
+        let _ = std::fs::remove_dir_all(b_dir);
+    }
+
+    #[test]
+    fn test_truncated_signature_fails() {
+        let (alice, a_dir) = make_test_identity();
+        let (bob, b_dir) = make_test_identity();
+        let kc = KeyChain::generate_new();
+
+        let mut bundle = encrypt_key_bundle(&alice, &bob.x25519_public(), kc.all_epochs()).unwrap();
+        bundle.signature.truncate(32); // Ed25519 sigs are 64 bytes
+
+        let result = decrypt_key_bundle(
+            &bob,
+            &alice.x25519_public(),
+            &alice.verifying_key(),
+            &bundle,
+        );
+        assert!(result.is_err(), "truncated signature must fail");
+
+        let _ = std::fs::remove_dir_all(a_dir);
+        let _ = std::fs::remove_dir_all(b_dir);
+    }
+
+    #[test]
+    fn test_truncated_epoch_blob_fails() {
+        let (alice, a_dir) = make_test_identity();
+        let (bob, b_dir) = make_test_identity();
+        let kc = KeyChain::generate_new();
+
+        let bundle = encrypt_key_bundle(&alice, &bob.x25519_public(), kc.all_epochs()).unwrap();
+        // Create a bundle with a too-short blob but valid signature structure
+        let short_bundle = EncryptedKeyBundle {
+            epochs: vec![(0, vec![0u8; 5])],
+            signature: bundle.signature.clone(),
+        };
+
+        let result = decrypt_key_bundle(
+            &bob,
+            &alice.x25519_public(),
+            &alice.verifying_key(),
+            &short_bundle,
+        );
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(a_dir);
+        let _ = std::fs::remove_dir_all(b_dir);
+    }
+
+    #[test]
+    fn test_bidirectional_key_exchange() {
+        // Verify Alice→Bob and Bob→Alice both work (HKDF salt ordering is symmetric)
+        let (alice, a_dir) = make_test_identity();
+        let (bob, b_dir) = make_test_identity();
+        let kc = KeyChain::generate_new();
+
+        // Alice sends to Bob
+        let bundle_ab = encrypt_key_bundle(&alice, &bob.x25519_public(), kc.all_epochs()).unwrap();
+        let dec_ab = decrypt_key_bundle(
+            &bob,
+            &alice.x25519_public(),
+            &alice.verifying_key(),
+            &bundle_ab,
+        )
+        .unwrap();
+        assert_eq!(dec_ab[0].key, kc.get(0).unwrap().key);
+
+        // Bob sends to Alice
+        let bundle_ba = encrypt_key_bundle(&bob, &alice.x25519_public(), kc.all_epochs()).unwrap();
+        let dec_ba = decrypt_key_bundle(
+            &alice,
+            &bob.x25519_public(),
+            &bob.verifying_key(),
+            &bundle_ba,
+        )
+        .unwrap();
+        assert_eq!(dec_ba[0].key, kc.get(0).unwrap().key);
+
+        let _ = std::fs::remove_dir_all(a_dir);
+        let _ = std::fs::remove_dir_all(b_dir);
+    }
+
+    #[test]
+    fn test_epoch_aad_prevents_epoch_swap() {
+        // Verify that swapping the epoch number on a blob fails decryption
+        // even if the signature is somehow bypassed (tests AAD independently)
+        let (alice, a_dir) = make_test_identity();
+        let (bob, b_dir) = make_test_identity();
+        let mut kc = KeyChain::generate_new();
+        kc.rotate();
+
+        let bundle = encrypt_key_bundle(&alice, &bob.x25519_public(), kc.all_epochs()).unwrap();
+
+        // Take epoch 0's blob but label it as epoch 1 — re-sign so signature passes
+        let swapped_epochs = vec![(1u32, bundle.epochs[0].1.clone())];
+        let mut sign_payload = Vec::new();
+        for (epoch, blob) in &swapped_epochs {
+            sign_payload.extend_from_slice(&epoch.to_le_bytes());
+            sign_payload.extend_from_slice(blob);
+        }
+        let signature = alice.sign(&sign_payload).to_bytes().to_vec();
+        let swapped_bundle = EncryptedKeyBundle {
+            epochs: swapped_epochs,
+            signature,
+        };
+
+        let result = decrypt_key_bundle(
+            &bob,
+            &alice.x25519_public(),
+            &alice.verifying_key(),
+            &swapped_bundle,
+        );
+        assert!(
+            result.is_err(),
+            "epoch AAD must prevent decrypting blob under wrong epoch number"
+        );
 
         let _ = std::fs::remove_dir_all(a_dir);
         let _ = std::fs::remove_dir_all(b_dir);

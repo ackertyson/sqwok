@@ -32,8 +32,8 @@ impl KeyChain {
         KeyChain { keys: epochs }
     }
 
-    pub fn current_epoch(&self) -> u32 {
-        self.keys.last().map(|k| k.epoch).unwrap_or(0)
+    pub fn current_epoch(&self) -> Option<u32> {
+        self.keys.last().map(|k| k.epoch)
     }
 
     /// Get the key for a specific epoch (for decrypting old messages).
@@ -46,8 +46,14 @@ impl KeyChain {
     }
 
     /// Append a new epoch with a random key (called on member removal re-key).
+    /// Panics if the keychain is empty or epoch counter would overflow.
     pub fn rotate(&mut self) -> &EpochKey {
-        let new_epoch = self.current_epoch() + 1;
+        let current = self
+            .current_epoch()
+            .expect("cannot rotate an empty keychain");
+        let new_epoch = current
+            .checked_add(1)
+            .expect("epoch counter overflow (u32::MAX reached)");
         let mut key = [0u8; 32];
         OsRng.fill_bytes(&mut key);
         self.keys.push(EpochKey {
@@ -117,7 +123,7 @@ mod tests {
     #[test]
     fn test_generate_new_has_epoch_zero() {
         let kc = KeyChain::generate_new();
-        assert_eq!(kc.current_epoch(), 0);
+        assert_eq!(kc.current_epoch(), Some(0));
         assert!(kc.current_key().is_some());
     }
 
@@ -139,9 +145,9 @@ mod tests {
     fn test_rotate_increments_epoch() {
         let mut kc = KeyChain::generate_new();
         kc.rotate();
-        assert_eq!(kc.current_epoch(), 1);
+        assert_eq!(kc.current_epoch(), Some(1));
         kc.rotate();
-        assert_eq!(kc.current_epoch(), 2);
+        assert_eq!(kc.current_epoch(), Some(2));
     }
 
     #[test]
@@ -206,7 +212,7 @@ mod tests {
         let loaded = KeyChain::load(&dir)
             .unwrap()
             .expect("keychain must be present");
-        assert_eq!(loaded.current_epoch(), 1);
+        assert_eq!(loaded.current_epoch(), Some(1));
         assert_eq!(loaded.get(0).unwrap().key, kc.get(0).unwrap().key);
         assert_eq!(loaded.get(1).unwrap().key, kc.get(1).unwrap().key);
 
@@ -248,7 +254,119 @@ mod tests {
             },
         ];
         let kc = KeyChain::from_epochs(keys);
-        assert_eq!(kc.current_epoch(), 3);
+        assert_eq!(kc.current_epoch(), Some(3));
         assert_eq!(kc.all_epochs()[0].epoch, 1);
+    }
+
+    #[test]
+    fn test_empty_keychain_behavior() {
+        let kc = KeyChain::from_epochs(vec![]);
+        assert_eq!(kc.current_epoch(), None);
+        assert!(kc.current_key().is_none());
+        assert!(kc.get(0).is_none());
+        assert!(kc.all_epochs().is_empty());
+    }
+
+    #[test]
+    fn test_save_load_preserves_key_material_exactly() {
+        let dir = std::env::temp_dir().join(format!("sqwok_kc_exact_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut kc = KeyChain::generate_new();
+        kc.rotate();
+        kc.rotate();
+        let original_keys: Vec<(u32, [u8; 32])> =
+            kc.all_epochs().iter().map(|k| (k.epoch, k.key)).collect();
+
+        kc.save(&dir).unwrap();
+        let loaded = KeyChain::load(&dir).unwrap().unwrap();
+
+        let loaded_keys: Vec<(u32, [u8; 32])> = loaded
+            .all_epochs()
+            .iter()
+            .map(|k| (k.epoch, k.key))
+            .collect();
+        assert_eq!(original_keys, loaded_keys);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_save_load_many_epochs() {
+        let dir = std::env::temp_dir().join(format!("sqwok_kc_many_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut kc = KeyChain::generate_new();
+        for _ in 0..99 {
+            kc.rotate();
+        }
+        assert_eq!(kc.current_epoch(), Some(99));
+        assert_eq!(kc.all_epochs().len(), 100);
+
+        kc.save(&dir).unwrap();
+        let loaded = KeyChain::load(&dir).unwrap().unwrap();
+        assert_eq!(loaded.current_epoch(), Some(99));
+        assert_eq!(loaded.all_epochs().len(), 100);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_rejects_empty_file() {
+        let dir = std::env::temp_dir().join(format!("sqwok_kc_empty_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("keychain.bin"), []).unwrap();
+        // Empty file is 0 bytes, 0 % 36 == 0, so it loads as an empty keychain
+        let loaded = KeyChain::load(&dir).unwrap().unwrap();
+        assert!(loaded.all_epochs().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_add_epoch_with_gap() {
+        let mut kc = KeyChain::generate_new(); // epoch 0
+                                               // Skip epoch 1, add epoch 5 directly
+        kc.add_epoch(EpochKey {
+            epoch: 5,
+            key: [5u8; 32],
+        });
+        assert_eq!(kc.current_epoch(), Some(5));
+        assert!(kc.get(1).is_none());
+        assert!(kc.get(5).is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "epoch counter overflow")]
+    fn test_rotate_at_max_epoch_panics() {
+        let mut kc = KeyChain::from_epochs(vec![EpochKey {
+            epoch: u32::MAX,
+            key: [0u8; 32],
+        }]);
+        kc.rotate();
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot rotate an empty keychain")]
+    fn test_rotate_empty_keychain_panics() {
+        let mut kc = KeyChain::from_epochs(vec![]);
+        kc.rotate();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_sets_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("sqwok_kc_perm_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let kc = KeyChain::generate_new();
+        kc.save(&dir).unwrap();
+
+        let meta = std::fs::metadata(dir.join("keychain.bin")).unwrap();
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "keychain.bin must be owner-only read/write");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

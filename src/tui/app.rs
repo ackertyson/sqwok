@@ -1031,7 +1031,10 @@ impl AppState {
                     .take(4)
                     .map(|b| format!("{:02x}", b))
                     .collect();
-                return format!("ed:{} x:{} epoch:{}", ed_hex, x_hex, crypto.current_epoch());
+                let epoch = crypto
+                    .current_epoch()
+                    .map_or("none".into(), |e| e.to_string());
+                return format!("ed:{} x:{} epoch:{}", ed_hex, x_hex, epoch);
             }
         }
         "none".to_string()
