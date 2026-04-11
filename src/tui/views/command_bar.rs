@@ -2,7 +2,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
@@ -34,6 +34,7 @@ pub struct CommandBarState {
     pub input: String,
     pub suggestions: Vec<CommandSuggestion>,
     pub selected_suggestion: usize,
+    pub scroll_offset: usize,
 }
 
 impl CommandBarState {
@@ -42,6 +43,7 @@ impl CommandBarState {
             input: String::new(),
             suggestions: Vec::new(),
             selected_suggestion: 0,
+            scroll_offset: 0,
         }
     }
 
@@ -108,8 +110,22 @@ impl CommandBarState {
             }
         }
 
+        // Sort alphabetically by label, except keep /join <code> at top when active
+        if !input.starts_with("join ") || suggestions.is_empty() {
+            suggestions.sort_by(|a, b| a.label.cmp(&b.label));
+        }
+
         self.suggestions = suggestions;
         self.selected_suggestion = 0;
+        self.scroll_offset = 0;
+    }
+
+    fn adjust_scroll(&mut self, visible: usize) {
+        if self.selected_suggestion < self.scroll_offset {
+            self.scroll_offset = self.selected_suggestion;
+        } else if self.selected_suggestion >= self.scroll_offset + visible {
+            self.scroll_offset = self.selected_suggestion + 1 - visible;
+        }
     }
 
     pub fn select_prev(&mut self) {
@@ -119,12 +135,14 @@ impl CommandBarState {
             } else {
                 self.selected_suggestion -= 1;
             }
+            self.adjust_scroll(MAX_VISIBLE_SUGGESTIONS);
         }
     }
 
     pub fn select_next(&mut self) {
         if !self.suggestions.is_empty() {
             self.selected_suggestion = (self.selected_suggestion + 1) % self.suggestions.len();
+            self.adjust_scroll(MAX_VISIBLE_SUGGESTIONS);
         }
     }
 
@@ -135,30 +153,30 @@ impl CommandBarState {
     }
 }
 
+const MAX_VISIBLE_SUGGESTIONS: usize = 7;
+
 pub fn draw(frame: &mut Frame, state: &CommandBarState) {
     let area = frame.area();
 
-    let bar_height = if state.suggestions.is_empty() {
-        1u16
-    } else {
-        (state.suggestions.len() as u16 + 1).min(8)
-    };
-
+    let visible_count = state.suggestions.len().min(MAX_VISIBLE_SUGGESTIONS);
+    let bar_height = (visible_count as u16) + 1; // +1 for input row
     let bar_y = area.height.saturating_sub(bar_height);
 
-    // Suggestion list — fill full width with background so underlying content doesn't show through
+    // Clear the entire command bar area so the footer is fully covered
+    frame.render_widget(Clear, Rect::new(0, bar_y, area.width, bar_height));
+
+    // Suggestion list
     let overlay_bg = s::overlay_bg();
-    for (i, suggestion) in state
+    for (row, suggestion) in state
         .suggestions
         .iter()
         .enumerate()
-        .take((bar_height - 1) as usize)
+        .skip(state.scroll_offset)
+        .take(visible_count)
     {
-        let y = bar_y + i as u16;
-        if y >= area.height.saturating_sub(1) {
-            break;
-        }
-        let style = if i == state.selected_suggestion {
+        let y = bar_y + (row - state.scroll_offset) as u16;
+        let selected = row == state.selected_suggestion;
+        let style = if selected {
             Style::default().bg(s::selection_bg()).fg(s::fg())
         } else {
             Style::default().bg(overlay_bg).fg(s::dim())
@@ -169,17 +187,14 @@ pub fn draw(frame: &mut Frame, state: &CommandBarState) {
             Span::styled(format!("  {}", suggestion.description), style),
         ]);
         frame.render_widget(
-            Paragraph::new(line).style(Style::default().bg(if i == state.selected_suggestion {
-                s::selection_bg()
-            } else {
-                overlay_bg
-            })),
+            Paragraph::new(line).style(style),
             Rect::new(0, y, area.width, 1),
         );
     }
 
     // Input row
     let input_area = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
+    let input_style = Style::default().bg(overlay_bg);
     let input_line = Line::from(vec![
         Span::styled(
             "/",
@@ -209,8 +224,5 @@ pub fn draw(frame: &mut Frame, state: &CommandBarState) {
         ),
         Span::styled("█", Style::default().fg(s::accent())),
     ]);
-    frame.render_widget(
-        Paragraph::new(input_line).style(Style::default().bg(s::overlay_bg())),
-        input_area,
-    );
+    frame.render_widget(Paragraph::new(input_line).style(input_style), input_area);
 }
