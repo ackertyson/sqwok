@@ -104,15 +104,14 @@ Encryption keys are the one exception: when a group's keys rotate while someone 
 | `←` | Collapse an expanded thread |
 | `Enter` | Focus a message's thread input; send from an active input |
 | `Alt+←` / `Alt+→` | Switch pane focus |
+| `Alt+m` | Jump to next `@mention` |
+| `Alt+n` | Jump to next unread message |
+| `/` | Open command bar |
 | `Alt+\` | Split pane vertically |
 | `Alt+-` | Split pane horizontally |
 | `Alt+w` | Close the current pane |
-| `/` | Open command bar |
 | `Tab` | Cycle command bar suggestions |
 | `Esc` | Dismiss command bar or modal |
-| `End` | Jump to latest messages |
-| `Alt+m` | Jump to next `@mention` |
-| `Alt+n` | Jump to next unread message |
 
 Max thread depth is 2 (message → reply → sub-reply).
 
