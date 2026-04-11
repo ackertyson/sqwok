@@ -111,6 +111,8 @@ Encryption keys are the one exception: when a group's keys rotate while someone 
 | `Tab` | Cycle command bar suggestions |
 | `Esc` | Dismiss command bar or modal |
 | `End` | Jump to latest messages |
+| `Alt+m` | Jump to next `@mention` |
+| `Alt+n` | Jump to next unread message |
 
 Max thread depth is 2 (message → reply → sub-reply).
 

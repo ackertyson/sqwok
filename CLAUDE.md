@@ -59,7 +59,7 @@ Each event mutates `AppState` (`tui/app.rs`, the central state object) and optio
 - **`render.rs`** — Top-level frame layout: splits the terminal into top bar, pane area, bottom bar; handles multi-pane borders; dispatches to view components.
 - **`render_rows.rs`** — Builds the flat `Vec<RenderRow>` for a pane. `RenderRow` is the core display abstraction: a depth-aware enum (`Message`, `CollapsedThread`, `Input`, `TypingIndicator`) with an `indent: u8` field that drives visual nesting. All collapsed-group unread/mention status flows through `TuiMessageStore::unread_status`.
 - **`pane.rs`** — `Pane` struct (per-pane viewport state: selection, editing target, input buffers, expanded/collapsed sets). `InputTarget` enum (`MainChat`, `Thread(uuid)`, `Reply(reply_uuid, thread_uuid)`) with methods for converting to/from row fields.
-- **`store.rs`** — `TuiMessageStore`: in-memory display store. Holds `top_level` order, `by_uuid` map, and `threads` map. `unread_status(uuids)` is the single source of truth for collapsed-group highlight color decisions.
+- **`store.rs`** — `TuiMessageStore`: in-memory display store. Holds `top_level` order, `by_uuid` map, and `threads` map. `unread_status(uuids)` is the single source of truth for collapsed-group unread status. Note: `mentions_me` on `RenderRow` is **not** read-gated — it reflects raw mention status from the store. Visual read-gating (`is_unread && mentions_me`) is applied in `views/chat.rs`.
 - **`mention.rs`** — `@mention` parsing: `mentions_user`, `render_body` (wire tags → `@name`), `split_body_spans` (inline highlight segments), autocomplete query extraction.
 - **`style.rs`** — Color palette. All colors go through functions here; never hardcode colors elsewhere.
 - **`views/`** — Individual view components: `chat` (message list, top/bottom bars), `chat_picker`, `command_bar`, `contacts`, `error_toast`, `group_settings`, `invite`, `member_list`, `modal`, `search`.
@@ -73,6 +73,19 @@ Each event mutates `AppState` (`tui/app.rs`, the central state object) and optio
 `render_rows::build()` converts the message store into a flat list for rendering. The key design principle: all depth levels share the same `RenderRow::Message` / `RenderRow::Input` variants, differentiated only by `indent` (0 = top-level, 1 = thread reply, 2 = sub-reply). Adding a new depth level requires only: pushing messages with the appropriate `indent`, calling `push_depth_footer` with the right `InputTarget`, and extending `build_indent`/`indent_width` in `views/chat.rs`.
 
 `InputTarget` encodes which input field is active and can derive its own wire UUIDs (`to_wire_uuids`), indent depth (`indent`), and row-matching predicate (`matches_input_row`).
+
+### Navigation Shortcuts (Chat mode, non-editing)
+
+| Key | Action |
+|-----|--------|
+| `Alt+m` | Jump to next `@mention`, cycling; expands collapsed threads to land on the message |
+| `Alt+n` | Jump to next unread message, cycling; expands collapsed threads to land on the message |
+| `Alt+\` | Split pane vertically |
+| `Alt+-` | Split pane horizontally |
+| `Alt+w` | Close active pane |
+| `Alt+←/→` | Focus previous/next pane |
+
+Both `Alt+m` and `Alt+n` share the `jump_to_matching` helper in `app.rs`.
 
 ### Phoenix Channel Protocol
 
