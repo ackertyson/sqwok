@@ -160,20 +160,33 @@ pub fn draw_messages(frame: &mut Frame, area: Rect, app: &AppState, pane: &Pane,
         offset
     };
 
+    // Sticky thread-header rows: when the thread-root message (or depth-1
+    // parent) has been scrolled above the visible area, pin a 1-line
+    // truncated copy at the top of the pane so the reader always has context.
+    let sticky_indices = find_sticky_headers(&rows, scroll_offset);
+    let sticky_height = sticky_indices.len() as u16;
+    for (i, &row_idx) in sticky_indices.iter().enumerate() {
+        let gy = area.y + i as u16;
+        let gutter_area = Rect::new(area.x, gy, GUTTER_WIDTH, 1);
+        let row_area = Rect::new(content_x, gy, content_width, 1);
+        draw_gutter(frame, gutter_area, &rows[row_idx], false);
+        draw_sticky_row(frame, row_area, &rows[row_idx], content_width);
+    }
+
     // Show "scroll up for older messages" hint when there's more history and
     // the cursor is at the first row. Rendered in row 0; messages start below.
     let hint_shown = app.msg_store.has_more_above && selected == 0;
     if hint_shown {
         let hint =
             Paragraph::new("↑ scroll for older messages").style(Style::default().fg(s::dim()));
-        let hint_area = Rect::new(content_x, area.y, content_width, 1);
+        let hint_area = Rect::new(content_x, area.y + sticky_height, content_width, 1);
         frame.render_widget(hint, hint_area);
     }
 
     // Render rows from scroll_offset, tracking current y position.
     // Each row may occupy multiple lines depending on message length.
-    // If the scrollback hint is shown, it occupies the first row.
-    let mut y = if hint_shown { area.y + 1 } else { area.y };
+    // Sticky headers and the scrollback hint each occupy a row at the top.
+    let mut y = area.y + sticky_height + if hint_shown { 1 } else { 0 };
     let area_bottom = area.y + area.height;
     let mut last_rendered_row = scroll_offset;
     // Screen position of the cursor in the active input row, for popup placement.
@@ -730,23 +743,7 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
                 + if *typing_active { 4 } else { 0 } // " ..."
                 + 8; // leave some space in right margin for selected row highlight
             let preview_avail = (avail_width as usize).saturating_sub(reserved);
-            let preview_display_width = preview.width();
-            let truncated_preview: String = if preview_display_width <= preview_avail {
-                preview.clone()
-            } else {
-                // Truncate to fit within preview_avail - 1 columns (reserving 1 for "…")
-                let mut col = 0usize;
-                let mut s = String::new();
-                for ch in preview.chars() {
-                    let ch_w = ch.width().unwrap_or(0);
-                    if col + ch_w > preview_avail.saturating_sub(1) {
-                        break;
-                    }
-                    s.push(ch);
-                    col += ch_w;
-                }
-                s + "…"
-            };
+            let truncated_preview = truncate_to_cols(preview, preview_avail);
             let mut spans = vec![
                 Span::styled(
                     author.clone(),
@@ -1011,4 +1008,101 @@ fn build_indent(indent: u8) -> String {
         1 => "  └─ ".to_string(),
         _ => "  │  └─ ".to_string(),
     }
+}
+
+/// Truncate `s` to at most `max_cols` display columns, appending `…` if
+/// shortened. `max_cols` is the total budget including the ellipsis character.
+fn truncate_to_cols(s: &str, max_cols: usize) -> String {
+    let total: usize = s.chars().map(|c| c.width().unwrap_or(0)).sum();
+    if total <= max_cols {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut cols = 0usize;
+    for ch in s.chars() {
+        let ch_w = ch.width().unwrap_or(0);
+        if cols + ch_w > max_cols.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+        cols += ch_w;
+    }
+    out.push('…');
+    out
+}
+
+/// Return the row indices (in root-first order) that should be rendered as
+/// sticky 1-line headers above the visible area.
+///
+/// For every indent level below the first visible message's indent, we find
+/// the most recent row at that level above `scroll_offset` — that row is the
+/// correct ancestor by the ordering guarantees of `render_rows::build()`.
+/// Adding a new depth level requires no changes here.
+fn find_sticky_headers(rows: &[RenderRow], scroll_offset: usize) -> Vec<usize> {
+    if scroll_offset == 0 {
+        return vec![];
+    }
+
+    // Find the indent level of the first visible Message row.
+    let first_indent = match rows[scroll_offset..].iter().find_map(|r| match r {
+        RenderRow::Message { indent, .. } => Some(*indent),
+        _ => None,
+    }) {
+        Some(i) if i > 0 => i,
+        _ => return vec![],
+    };
+
+    // For each ancestor indent level, find the most recent row above the
+    // viewport at that level — it is always the correct ancestor.
+    (0..first_indent)
+        .filter_map(|target_indent| {
+            rows[..scroll_offset].iter().rposition(|r| match r {
+                RenderRow::Message { indent, .. } => *indent == target_indent,
+                _ => false,
+            })
+        })
+        .collect()
+}
+
+/// Render a single-line truncated version of a message row as a sticky header.
+fn draw_sticky_row(frame: &mut Frame, area: Rect, row: &RenderRow, avail_width: u16) {
+    let RenderRow::Message {
+        indent,
+        author,
+        author_color,
+        body,
+        timestamp,
+        ..
+    } = row
+    else {
+        return;
+    };
+
+    let indent_str = build_indent(*indent);
+    let indent_cols = indent_str.width();
+    let author_cols = author.width();
+    let ts_suffix = format!("  {}", timestamp);
+    let ts_cols = ts_suffix.width();
+    let prefix_cols = indent_cols + author_cols + 2; // +2 for "  " spacer after author
+    let w = avail_width as usize;
+    let body_avail = w.saturating_sub(prefix_cols + ts_cols);
+    let body_display = truncate_to_cols(body, body_avail);
+
+    let name_style = Style::default()
+        .fg(*author_color)
+        .add_modifier(Modifier::BOLD);
+    let body_style = Style::default().fg(s::fg());
+
+    let spans = vec![
+        Span::styled(indent_str, Style::default().fg(s::dim())),
+        Span::styled(author.clone(), name_style),
+        Span::styled("  ", body_style),
+        Span::styled(body_display, body_style),
+        Span::styled(ts_suffix, Style::default().fg(s::dim())),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(s::BG)),
+        area,
+    );
 }
