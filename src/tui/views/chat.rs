@@ -84,6 +84,8 @@ pub fn draw_bottom_bar(frame: &mut Frame, area: Rect) {
         ("Enter", "new msg"),
         ("Esc", "cancel input"),
         ("→/←", "thread show/hide"),
+        ("Alt+n", "next unread"),
+        ("Alt+m", "next mention"),
         ("/", "cmd"),
     ]);
     status_spans.extend(hint1.spans);

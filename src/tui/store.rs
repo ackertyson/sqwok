@@ -101,7 +101,7 @@ impl TuiMessageStore {
             .into_iter()
             .fold((false, false), |(unread, mention), uuid| {
                 match self.by_uuid.get(uuid) {
-                    Some(m) => (unread || !m.read, mention || (!m.read && m.mentions_me)),
+                    Some(m) => (unread || !m.read, mention || m.mentions_me),
                     None => (unread, mention),
                 }
             })

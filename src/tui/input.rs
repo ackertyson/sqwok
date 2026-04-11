@@ -138,6 +138,14 @@ fn handle_chat(app: &mut AppState, event: CtEvent) -> Action {
                 app.focus_pane(1);
                 Action::Continue
             }
+            (KeyModifiers::ALT, KeyCode::Char('m')) => {
+                app.jump_to_mention();
+                Action::Continue
+            }
+            (KeyModifiers::ALT, KeyCode::Char('n')) => {
+                app.jump_to_unread();
+                Action::Continue
+            }
 
             (KeyModifiers::NONE, KeyCode::Char('/')) => {
                 let mut bar = CommandBarState::new();

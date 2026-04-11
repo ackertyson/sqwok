@@ -789,6 +789,76 @@ impl AppState {
         }
     }
 
+    pub fn jump_to_mention(&mut self) {
+        self.jump_to_matching(
+            |r| match r {
+                RenderRow::Message { mentions_me, .. } => *mentions_me,
+                RenderRow::CollapsedThread { mentions_me, .. } => *mentions_me,
+                _ => false,
+            },
+            "No @mentions",
+        );
+    }
+
+    pub fn jump_to_unread(&mut self) {
+        self.jump_to_matching(
+            |r| match r {
+                RenderRow::Message { is_unread, .. } => *is_unread,
+                RenderRow::CollapsedThread { is_unread, .. } => *is_unread,
+                _ => false,
+            },
+            "No unread messages",
+        );
+    }
+
+    /// Advance the active pane's selection to the next row satisfying `matches`,
+    /// cycling back to the first match after the last. If the target is a
+    /// collapsed thread, it is expanded and the cursor lands on the first
+    /// matching message inside rather than the thread header.
+    fn jump_to_matching(&mut self, matches: impl Fn(&RenderRow) -> bool, empty_toast: &str) {
+        let rows = self.build_render_rows();
+        let indices: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| if matches(r) { Some(i) } else { None })
+            .collect();
+
+        if indices.is_empty() {
+            self.show_toast(empty_toast, 2);
+            return;
+        }
+
+        let current = self.panes[self.active_pane].selected;
+        let next = indices
+            .iter()
+            .copied()
+            .find(|&idx| idx > current)
+            .unwrap_or(indices[0]);
+
+        // If the target is a collapsed thread, expand it and land on the first
+        // matching message inside rather than the thread header.
+        if let RenderRow::CollapsedThread { uuid, .. } = &rows[next] {
+            let thread_uuid = uuid.clone();
+            self.panes[self.active_pane]
+                .expanded
+                .insert(thread_uuid.clone());
+            let rows = self.build_render_rows();
+            if let Some(idx) = rows.iter().position(|r| match r {
+                RenderRow::Message {
+                    uuid,
+                    thread_uuid: t,
+                    ..
+                } => matches(r) && (*uuid == thread_uuid || t.as_deref() == Some(&thread_uuid)),
+                _ => false,
+            }) {
+                self.panes[self.active_pane].selected = idx;
+                return;
+            }
+        }
+
+        self.panes[self.active_pane].selected = next;
+    }
+
     /// Save the UUID of the currently-selected message to disk so it can be
     /// restored the next time this chat is opened.
     pub fn save_scroll_position(&self) {

@@ -128,7 +128,7 @@ pub fn build(
                 timestamp: format_timestamp(&msg.timestamp),
                 typing_active,
                 is_unread: !msg.read || replies_unread,
-                mentions_me: (!msg.read && msg.mentions_me) || replies_mention,
+                mentions_me: msg.mentions_me || replies_mention,
             });
         } else {
             let top_gutter = if reply_count > 0 {
@@ -219,7 +219,7 @@ pub fn build(
                         sub_typing_active,
                         gutter: d1_gutter,
                         is_unread: !reply.read || subs_unread,
-                        mentions_me: (!reply.read && reply.mentions_me) || subs_mention,
+                        mentions_me: reply.mentions_me || subs_mention,
                         mentioned_names: reply.mentioned_names.clone(),
                     });
 
