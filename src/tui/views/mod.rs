@@ -1,3 +1,4 @@
+pub mod block_users;
 pub mod chat;
 pub mod chat_picker;
 pub mod command_bar;

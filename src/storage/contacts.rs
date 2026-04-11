@@ -33,6 +33,10 @@ impl ContactStore {
             CREATE TABLE IF NOT EXISTS chat_scroll (
                 chat_uuid TEXT PRIMARY KEY,
                 msg_uuid  TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                uuid TEXT PRIMARY KEY,
+                blocked_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             );",
         )?;
         Ok(Self { conn })
@@ -99,6 +103,40 @@ impl ContactStore {
             .prepare("SELECT msg_uuid FROM chat_scroll WHERE chat_uuid = ?1")?;
         let mut rows = stmt.query(params![chat_uuid])?;
         Ok(rows.next()?.map(|r| r.get(0)).transpose()?)
+    }
+
+    /// Add a UUID to the blocked list.
+    pub fn block(&self, uuid: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO blocked_users (uuid) VALUES (?1)",
+            params![uuid],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a UUID from the blocked list.
+    pub fn unblock(&self, uuid: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM blocked_users WHERE uuid = ?1", params![uuid])?;
+        Ok(())
+    }
+
+    /// Look up a contact's screenname by UUID.
+    pub fn screenname_for(&self, uuid: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT screenname FROM contacts WHERE uuid = ?1")?;
+        let mut rows = stmt.query(params![uuid])?;
+        Ok(rows.next()?.map(|r| r.get(0)).transpose()?)
+    }
+
+    /// Return all blocked UUIDs.
+    pub fn blocked_uuids(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT uuid FROM blocked_users ORDER BY blocked_at ASC")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     /// Get all contacts, most recently seen first.

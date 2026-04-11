@@ -62,11 +62,15 @@ Each event mutates `AppState` (`tui/app.rs`, the central state object) and optio
 - **`store.rs`** — `TuiMessageStore`: in-memory display store. Holds `top_level` order, `by_uuid` map, and `threads` map. `unread_status(uuids)` is the single source of truth for collapsed-group unread status. Note: `mentions_me` on `RenderRow` is **not** read-gated — it reflects raw mention status from the store. Visual read-gating (`is_unread && mentions_me`) is applied in `views/chat.rs`.
 - **`mention.rs`** — `@mention` parsing: `mentions_user`, `render_body` (wire tags → `@name`), `split_body_spans` (inline highlight segments), autocomplete query extraction.
 - **`style.rs`** — Color palette. All colors go through functions here; never hardcode colors elsewhere.
-- **`views/`** — Individual view components: `chat` (message list, top/bottom bars), `chat_picker`, `command_bar`, `contacts`, `error_toast`, `group_settings`, `invite`, `member_list`, `modal`, `search`.
+- **`views/`** — Individual view components: `block_users` (block/unblock peer modal), `chat` (message list, top/bottom bars), `chat_picker`, `command_bar`, `contacts`, `error_toast`, `group_settings`, `invite`, `member_list`, `modal`, `search`.
 
 ### State Modes
 
-`AppState` operates in two modes: `ChatPicker` (chat list) and `Chat` (active conversation). Modals (`MemberList`, `GroupSettings`, `InviteCreate`, `Search`, `Contacts`) overlay on top. `Chat` mode supports multiple simultaneous panes (vertical or horizontal split) via `Vec<Pane>` with an `active_pane` index.
+`AppState` operates in two modes: `ChatPicker` (chat list) and `Chat` (active conversation). Modals (`MemberList`, `GroupSettings`, `InviteCreate`, `Search`, `Contacts`, `BlockUsers`) overlay on top. `Chat` mode supports multiple simultaneous panes (vertical or horizontal split) via `Vec<Pane>` with an `active_pane` index.
+
+### Block Users
+
+Blocking is local-only and persists across sessions in a `blocked_users` table in `~/.sqwok/contacts.db`. `AppState.blocked_uuids: HashSet<String>` is loaded at startup. Blocked peers are suppressed everywhere: their messages and entire threads are hidden in `render_rows::build()`, they are excluded from the member list, peer counts, and `@mention` autocomplete. The `/block` command (short: `bl`) opens the `BlockUsers` modal — a two-section UI (search on top, blocked list below). If a message is selected when `/block` is invoked, the sender is preselected in search. Block/unblock both require a y/n confirmation prompt.
 
 ### Render Row Model
 

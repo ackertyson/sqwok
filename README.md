@@ -117,7 +117,13 @@ Max thread depth is 2 (message → reply → sub-reply).
 
 ## Command Bar
 
-Press `/` to open the command bar. Use it to switch chats, search users, manage members, create invite codes, and access settings.
+Press `/` to open the command bar. Use it to switch chats, search users, manage members, create invite codes, access settings, and manage blocked users.
+
+## Blocking Users
+
+Type `/block` (or `/bl`) to open the block manager. The top section lets you search for peers to block; the bottom section lists currently blocked users you can unblock. If you have a message selected when you open the command, the sender is pre-filled in the search.
+
+Blocking is local-only — it hides the peer's messages and threads from your view without notifying anyone. Blocked users are also excluded from the member list, peer counts, and `@mention` autocomplete.
 
 ## Invite Codes
 

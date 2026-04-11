@@ -97,6 +97,7 @@ fn draw_chat(frame: &mut Frame, app: &mut AppState) {
             }
             Some(ModalState::Search(s)) => views::search::draw(frame, s),
             Some(ModalState::Contacts(s)) => views::contacts::draw(frame, s),
+            Some(ModalState::BlockUsers(s)) => views::block_users::draw(frame, s),
             _ => {}
         }
     }

@@ -205,6 +205,12 @@ async fn main() -> Result<()> {
     app.name_cache
         .insert(user_uuid_str.clone(), app.my_screenname.clone());
     app.contact_store = contact_store;
+    // Load persisted block list.
+    if let Some(ref cs) = app.contact_store {
+        if let Ok(uuids) = cs.blocked_uuids() {
+            app.blocked_uuids = uuids.into_iter().collect();
+        }
+    }
     if let Some(err_msg) = fetch_error {
         app.toast = Some((
             err_msg,

@@ -143,12 +143,59 @@ pub enum Mode {
     Chat,
 }
 
+/// State for the block-users modal.
+#[derive(Debug)]
+pub struct BlockUsersModalState {
+    pub search_input: String,
+    /// Search suggestions: (uuid, screenname)
+    pub suggestions: Vec<(String, String)>,
+    pub selected_suggestion: usize,
+    /// Currently blocked peers: (uuid, screenname)
+    pub blocked_list: Vec<(String, String)>,
+    pub selected_blocked: usize,
+    pub focus: BlockFocus,
+    /// Pending confirmation: (uuid, screenname, action)
+    pub confirm: Option<(String, String, BlockAction)>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum BlockFocus {
+    Search,
+    Blocked,
+}
+
+#[derive(Debug)]
+pub enum BlockAction {
+    Block,
+    Unblock,
+}
+
+impl BlockUsersModalState {
+    pub fn new(preselect: Option<(String, String)>, blocked_list: Vec<(String, String)>) -> Self {
+        let (search_input, suggestions) = if let Some((uuid, name)) = preselect {
+            (name.clone(), vec![(uuid, name)])
+        } else {
+            (String::new(), Vec::new())
+        };
+        BlockUsersModalState {
+            search_input,
+            suggestions,
+            selected_suggestion: 0,
+            blocked_list,
+            selected_blocked: 0,
+            focus: BlockFocus::Search,
+            confirm: None,
+        }
+    }
+}
+
 pub enum ModalState {
     MemberList,
     GroupSettings,
     InviteCreate(InviteModalState),
     Search(SearchModalState),
     Contacts(ContactsModalState),
+    BlockUsers(BlockUsersModalState),
 }
 
 pub enum ConnStatus {
@@ -245,6 +292,8 @@ pub struct AppState {
     pub mention_popup: Option<MentionState>,
     /// Pending mentions committed to input buffers, consumed on send.
     pub pending_mentions: Vec<PendingMention>,
+    /// UUIDs the local user has blocked. Persisted in contacts.db.
+    pub blocked_uuids: HashSet<String>,
 }
 
 impl AppState {
@@ -293,6 +342,7 @@ impl AppState {
             typing_indicators_updated: None,
             mention_popup: None,
             pending_mentions: Vec::new(),
+            blocked_uuids: HashSet::new(),
         }
     }
 
@@ -304,12 +354,12 @@ impl AppState {
         &mut self.panes[self.active_pane]
     }
 
-    /// Open the `@mention` autocomplete popup with all non-self members.
+    /// Open the `@mention` autocomplete popup with all non-self, non-blocked members.
     pub fn open_mention_popup(&mut self) {
         let matches = self
             .members
             .iter()
-            .filter(|m| m.uuid != self.my_uuid)
+            .filter(|m| m.uuid != self.my_uuid && !self.blocked_uuids.contains(&m.uuid))
             .map(|m| (m.uuid.clone(), m.screenname.clone()))
             .collect();
         self.mention_popup = Some(MentionState {
@@ -319,7 +369,7 @@ impl AppState {
         });
     }
 
-    /// Filter the popup matches to members whose screenname starts with `query`.
+    /// Filter the popup matches to non-blocked members whose screenname starts with `query`.
     pub fn update_mention_query(&mut self, query: &str) {
         if let Some(ref mut popup) = self.mention_popup {
             popup.query = query.to_string();
@@ -327,7 +377,11 @@ impl AppState {
             popup.matches = self
                 .members
                 .iter()
-                .filter(|m| m.uuid != self.my_uuid && m.screenname.to_lowercase().starts_with(&q))
+                .filter(|m| {
+                    m.uuid != self.my_uuid
+                        && !self.blocked_uuids.contains(&m.uuid)
+                        && m.screenname.to_lowercase().starts_with(&q)
+                })
                 .map(|m| (m.uuid.clone(), m.screenname.clone()))
                 .collect();
             popup.selected = 0;
@@ -464,6 +518,14 @@ impl AppState {
         let new_sel = (self.panes[self.active_pane].selected as i32 + delta)
             .clamp(0, row_count as i32 - 1) as usize;
         self.panes[self.active_pane].selected = new_sel;
+
+        // Track the UUID of the selected message for /block preselection.
+        self.panes[self.active_pane].selected_uuid =
+            if let Some(RenderRow::Message { uuid, .. }) = rows.get(new_sel) {
+                Some(uuid.clone())
+            } else {
+                None
+            };
 
         // Mark message as read when the cursor lands on it
         let uuid_to_mark = if let Some(RenderRow::Message {
@@ -1848,15 +1910,60 @@ impl AppState {
             &self.name_cache,
             &self.highlights,
             &self.typing_indicators,
+            &self.blocked_uuids,
         )
     }
 
-    /// Number of online peers (excludes self).
+    /// Total visible peers (excludes self and blocked users).
+    pub fn peer_count(&self) -> usize {
+        self.members
+            .iter()
+            .filter(|m| m.uuid != self.my_uuid && !self.blocked_uuids.contains(&m.uuid))
+            .count()
+    }
+
+    /// Number of online peers (excludes self and blocked users).
     pub fn online_count(&self) -> usize {
         self.members
             .iter()
-            .filter(|m| m.online && m.uuid != self.my_uuid)
+            .filter(|m| m.online && m.uuid != self.my_uuid && !self.blocked_uuids.contains(&m.uuid))
             .count()
+    }
+
+    /// Add a peer to the block list and persist.
+    pub fn block_user(&mut self, uuid: String) {
+        self.blocked_uuids.insert(uuid.clone());
+        if let Some(ref cs) = self.contact_store {
+            let _ = cs.block(&uuid);
+        }
+    }
+
+    /// Remove a peer from the block list and persist.
+    pub fn unblock_user(&mut self, uuid: &str) {
+        self.blocked_uuids.remove(uuid);
+        if let Some(ref cs) = self.contact_store {
+            let _ = cs.unblock(uuid);
+        }
+    }
+
+    /// Return the list of blocked (uuid, screenname) pairs for display in the modal.
+    pub fn blocked_screennames(&self) -> Vec<(String, String)> {
+        self.blocked_uuids
+            .iter()
+            .map(|uuid| {
+                let name = self
+                    .name_cache
+                    .get(uuid)
+                    .cloned()
+                    .or_else(|| {
+                        self.contact_store
+                            .as_ref()
+                            .and_then(|cs| cs.screenname_for(uuid).ok().flatten())
+                    })
+                    .unwrap_or_else(|| uuid.chars().take(8).collect());
+                (uuid.clone(), name)
+            })
+            .collect()
     }
 
     /// Compute and set the terminal title reflecting unread count and online members.

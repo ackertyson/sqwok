@@ -30,7 +30,7 @@ pub fn draw_top_bar(frame: &mut Frame, area: Rect, app: &AppState) {
     };
 
     // Build the right-side status string first so we can reserve space for it.
-    let total = app.members.len().saturating_sub(1);
+    let total = app.peer_count();
     let online = app.online_count();
     let members_text = format!("{} peers", total);
     let online_text = format!("  {} online", online);

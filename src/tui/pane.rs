@@ -70,6 +70,8 @@ pub struct Pane {
     pub expanded: HashSet<String>,
     /// Which depth-1 messages have their depth-2 replies collapsed in this pane
     pub collapsed_subs: HashSet<String>,
+    /// UUID of the currently selected Message row, if any (used for preselection in /block).
+    pub selected_uuid: Option<String>,
 }
 
 impl Pane {
@@ -81,6 +83,7 @@ impl Pane {
             cursor_positions: HashMap::new(),
             expanded: HashSet::new(),
             collapsed_subs: HashSet::new(),
+            selected_uuid: None,
         }
     }
 
@@ -88,6 +91,7 @@ impl Pane {
         self.expanded.clear();
         self.collapsed_subs.clear();
         self.selected = 0;
+        self.selected_uuid = None;
         self.editing = None;
         self.inputs.clear();
         self.cursor_positions.clear();

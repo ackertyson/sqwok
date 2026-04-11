@@ -14,6 +14,7 @@ pub fn draw(frame: &mut Frame, app: &AppState) {
         let items: Vec<ListItem> = app
             .members
             .iter()
+            .filter(|m| !app.blocked_uuids.contains(&m.uuid))
             .enumerate()
             .map(|(idx, m)| {
                 let status = if m.online { "●" } else { "○" };

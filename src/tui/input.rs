@@ -1,6 +1,8 @@
 use crossterm::event::{Event as CtEvent, KeyCode, KeyModifiers};
 
-use super::app::{AppState, ContactsModalState, ModalState, Mode, SearchModalState};
+use super::app::{
+    AppState, BlockUsersModalState, ContactsModalState, ModalState, Mode, SearchModalState,
+};
 use super::views::command_bar::{CommandAction, CommandBarState};
 
 /// Extract the mention query currently being typed: the text between the last
@@ -274,22 +276,17 @@ fn handle_editing(app: &mut AppState, event: CtEvent) -> Action {
                 // Manage the mention popup.
                 if c == '@' {
                     app.open_mention_popup();
-                } else if let Some(ref mut popup) = app.mention_popup {
-                    // Append to the query and re-filter.
-                    let mut q = popup.query.clone();
-                    q.push(c);
-                    let q_lower = q.to_lowercase();
-                    popup.query = q;
-                    popup.matches = app
-                        .members
-                        .iter()
-                        .filter(|m| {
-                            m.uuid != app.my_uuid
-                                && m.screenname.to_lowercase().starts_with(&q_lower)
+                } else if app.mention_popup.is_some() {
+                    let new_query = app
+                        .mention_popup
+                        .as_ref()
+                        .map(|p| {
+                            let mut q = p.query.clone();
+                            q.push(c);
+                            q
                         })
-                        .map(|m| (m.uuid.clone(), m.screenname.clone()))
-                        .collect();
-                    popup.selected = 0;
+                        .unwrap_or_default();
+                    app.update_mention_query(&new_query);
                 }
                 Action::Continue
             }
@@ -474,6 +471,47 @@ fn handle_modal(app: &mut AppState, event: CtEvent) -> Action {
                 return Action::Continue;
             }
 
+            // Delegate to block-users modal
+            if matches!(&app.modal, Some(ModalState::BlockUsers(_))) {
+                use super::views::block_users::{handle_input as block_input, BlockUsersAction};
+                let action = if let Some(ModalState::BlockUsers(ref mut s)) = app.modal {
+                    Some(block_input(key, s))
+                } else {
+                    None
+                };
+                match action {
+                    Some(BlockUsersAction::Close) => {
+                        app.modal = None;
+                    }
+                    Some(BlockUsersAction::Block(uuid, _name)) => {
+                        app.block_user(uuid);
+                        // Refresh blocked list in the modal
+                        let updated = app.blocked_screennames();
+                        if let Some(ModalState::BlockUsers(ref mut s)) = app.modal {
+                            s.blocked_list = updated;
+                        }
+                    }
+                    Some(BlockUsersAction::Unblock(uuid, _name)) => {
+                        app.unblock_user(&uuid);
+                        // Refresh blocked list in the modal
+                        let updated = app.blocked_screennames();
+                        if let Some(ModalState::BlockUsers(ref mut s)) = app.modal {
+                            s.blocked_list = updated;
+                        }
+                    }
+                    Some(BlockUsersAction::Continue) | None => {}
+                }
+                // Re-query suggestions unless a confirmation is already pending.
+                let confirm_pending = matches!(
+                    &app.modal,
+                    Some(ModalState::BlockUsers(s)) if s.confirm.is_some()
+                );
+                if !confirm_pending {
+                    refresh_block_suggestions(app);
+                }
+                return Action::Continue;
+            }
+
             // Group settings modal: handle [L] for leave, [R] for key rotation
             if matches!(&app.modal, Some(ModalState::GroupSettings)) {
                 match key.code {
@@ -563,5 +601,83 @@ fn execute_command(app: &mut AppState, action: CommandAction) -> Action {
             app.rotate_and_distribute_keys();
             Action::Continue
         }
+        CommandAction::BlockUsers => {
+            // Preselect sender of currently selected message (if not self)
+            let preselect = app
+                .active_pane()
+                .selected_uuid
+                .clone()
+                .and_then(|msg_uuid| app.msg_store.by_uuid.get(&msg_uuid))
+                .filter(|m| m.sender_uuid != app.my_uuid)
+                .map(|m| (m.sender_uuid.clone(), m.sender_name.clone()));
+
+            let blocked_list = app.blocked_screennames();
+            let mut modal_state = BlockUsersModalState::new(preselect, blocked_list);
+            // Augment suggestions from contacts/members — but keep the preselect entry
+            // if the search returns nothing (e.g. fresh session, peer not yet in DB).
+            if !modal_state.search_input.is_empty() {
+                let query = modal_state.search_input.clone();
+                let from_search = search_contacts_for_block(app, &query);
+                if !from_search.is_empty() {
+                    modal_state.suggestions = from_search;
+                }
+                modal_state.selected_suggestion = 0;
+            }
+            app.modal = Some(ModalState::BlockUsers(modal_state));
+            Action::Continue
+        }
     }
+}
+
+/// Re-query the contact store and update suggestions in the BlockUsers modal.
+fn refresh_block_suggestions(app: &mut AppState) {
+    let query = if let Some(ModalState::BlockUsers(ref s)) = app.modal {
+        s.search_input.clone()
+    } else {
+        return;
+    };
+    let suggestions = search_contacts_for_block(app, &query);
+    if let Some(ModalState::BlockUsers(ref mut s)) = app.modal {
+        s.suggestions = suggestions;
+        // Reset selection if out of bounds after refresh
+        let max = s.suggestions.len().saturating_sub(1);
+        if s.selected_suggestion > max {
+            s.selected_suggestion = 0;
+        }
+    }
+}
+
+/// Search for block suggestions, excluding self and already-blocked users.
+/// Merges contacts DB results with current chat members so peers are always findable.
+fn search_contacts_for_block(app: &AppState, query: &str) -> Vec<(String, String)> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let q = query.to_lowercase();
+    let is_eligible = |uuid: &str| uuid != app.my_uuid && !app.blocked_uuids.contains(uuid);
+
+    // Start with the contacts DB (handles peers seen across sessions).
+    let mut results: Vec<(String, String)> = app
+        .contact_store
+        .as_ref()
+        .and_then(|cs| cs.search(query, 8).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| is_eligible(&c.uuid.to_string()))
+        .map(|c| (c.uuid.to_string(), c.screenname))
+        .collect();
+
+    // Fill in any current members not yet covered (e.g. fresh session before DB upsert).
+    let seen: std::collections::HashSet<String> = results.iter().map(|(u, _)| u.clone()).collect();
+    for m in &app.members {
+        if !seen.contains(&m.uuid)
+            && is_eligible(&m.uuid)
+            && m.screenname.to_lowercase().contains(&q)
+        {
+            results.push((m.uuid.clone(), m.screenname.clone()));
+        }
+    }
+
+    results.truncate(8);
+    results
 }

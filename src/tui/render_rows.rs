@@ -71,6 +71,7 @@ pub enum RenderRow {
 ///
 /// `member_order` is a slice of member UUIDs in join order, used to assign
 /// deterministic per-session colors. Pass `&[]` if members aren't yet known.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     pane: &Pane,
     msg_store: &TuiMessageStore,
@@ -79,6 +80,7 @@ pub fn build(
     name_cache: &HashMap<String, String>,
     highlights: &HashMap<String, Instant>,
     typing_indicators: &HashSet<(Option<String>, Option<String>)>,
+    blocked_uuids: &HashSet<String>,
 ) -> Vec<RenderRow> {
     let mut rows = Vec::new();
 
@@ -106,6 +108,11 @@ pub fn build(
             Some(m) => m,
             None => continue,
         };
+
+        // Skip entire thread when the top-level author is blocked.
+        if blocked_uuids.contains(&msg.sender_uuid) {
+            continue;
+        }
 
         let reply_count = msg_store.reply_count(top_uuid) as u32;
         let is_expanded = pane.expanded.contains(top_uuid.as_str());
@@ -174,6 +181,10 @@ pub fn build(
                         None => continue,
                     };
 
+                    if blocked_uuids.contains(&reply.sender_uuid) {
+                        continue;
+                    }
+
                     // Collect d2 replies belonging to this d1 message once; reuse below.
                     let d2_for_reply: Vec<&String> = d2_uuids
                         .iter()
@@ -230,6 +241,10 @@ pub fn build(
                                 Some(m) => m,
                                 None => continue,
                             };
+
+                            if blocked_uuids.contains(&sub.sender_uuid) {
+                                continue;
+                            }
                             rows.push(RenderRow::Message {
                                 uuid: sub_uuid.to_string(),
                                 author: display_name(&sub.sender_uuid, &sub.sender_name),

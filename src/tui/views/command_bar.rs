@@ -18,6 +18,7 @@ pub enum CommandAction {
     Contacts,
     JoinByCode(String),
     RotateKeys,
+    BlockUsers,
     Quit,
 }
 
@@ -57,6 +58,7 @@ impl CommandBarState {
             ("contacts", "co", CommandAction::Contacts),
             ("join", "j", CommandAction::JoinByCode(String::new())),
             ("rotate", "rot", CommandAction::RotateKeys),
+            ("block", "bl", CommandAction::BlockUsers),
             ("quit", "q", CommandAction::Quit),
         ];
 
@@ -68,6 +70,7 @@ impl CommandBarState {
             "Local contacts",
             "Join by invite code",
             "Rotate encryption keys",
+            "Manage blocked users",
             "Exit sqwok",
         ];
 
