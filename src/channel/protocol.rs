@@ -112,6 +112,27 @@ mod tests {
         assert_eq!(decoded.event, "heartbeat");
     }
 
+    #[cfg(test)]
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn frame_roundtrip_preserves_fields(
+                topic in "[^\0]{1,64}",
+                event in "[^\0]{1,64}",
+            ) {
+                let frame = Frame::new(&topic, &event, serde_json::json!(null));
+                let encoded = frame.encode();
+                let decoded = Frame::decode(&encoded).unwrap();
+                prop_assert_eq!(decoded.topic, topic);
+                prop_assert_eq!(decoded.event, event);
+                prop_assert!(decoded.join_ref.is_none());
+            }
+        }
+    }
+
     #[test]
     fn test_decode_invalid_returns_none() {
         assert!(Frame::decode("not json").is_none());

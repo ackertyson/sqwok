@@ -197,6 +197,38 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn spans_concatenate_to_original(
+                line in ".*",
+                names in prop::collection::vec("[a-zA-Z0-9_/.-]{1,20}", 0..5),
+            ) {
+                let spans = split_body_spans(&line, &names);
+                let rejoined: String = spans.iter().map(|(s, _)| s.as_str()).collect();
+                prop_assert_eq!(rejoined, line);
+            }
+
+            #[test]
+            fn render_body_is_idempotent(
+                body in ".*",
+                cache_entries in prop::collection::vec(
+                    ("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", ".*"),
+                    0..4,
+                ),
+            ) {
+                let cache: HashMap<String, String> = cache_entries.into_iter().collect();
+                let once = render_body(&body, &cache);
+                let twice = render_body(&once, &cache);
+                prop_assert_eq!(once, twice);
+            }
+        }
+    }
+
     #[test]
     fn test_is_uuid_like() {
         assert!(is_uuid_like("a1b2c3d4-e5f6-7890-abcd-ef1234567890"));

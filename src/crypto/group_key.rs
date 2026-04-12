@@ -120,6 +120,28 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
+    #[cfg(test)]
+    mod prop_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #[test]
+            fn add_epoch_invariants(epochs in prop::collection::vec(0u32..20, 0..30)) {
+                let mut kc = KeyChain::from_epochs(vec![]);
+                for e in &epochs {
+                    kc.add_epoch(EpochKey { epoch: *e, key: [0u8; 32] });
+                }
+                let stored = kc.all_epochs();
+                // Always sorted
+                prop_assert!(stored.windows(2).all(|w| w[0].epoch < w[1].epoch));
+                // Deduplicated — each epoch appears exactly once
+                let unique: std::collections::HashSet<u32> = epochs.iter().copied().collect();
+                prop_assert_eq!(stored.len(), unique.len());
+            }
+        }
+    }
+
     #[test]
     fn test_generate_new_has_epoch_zero() {
         let kc = KeyChain::generate_new();
