@@ -23,7 +23,30 @@ fn row_to_json(row: &rusqlite::Row) -> rusqlite::Result<Value> {
 
 impl MessageStore {
     #[cfg(test)]
-    pub fn from_connection(conn: Connection) -> Self {
+    pub fn open_in_memory() -> Self {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE messages (
+                uuid TEXT PRIMARY KEY,
+                sender_uuid TEXT NOT NULL,
+                thread_uuid TEXT,
+                reply_to_uuid TEXT,
+                global_seq INTEGER NOT NULL,
+                key_epoch INTEGER NOT NULL DEFAULT 0,
+                ciphertext TEXT NOT NULL,
+                client_ts TEXT NOT NULL,
+                server_ts TEXT NOT NULL,
+                read INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_messages_global_seq ON messages(global_seq);
+            CREATE INDEX idx_messages_thread ON messages(thread_uuid);
+            CREATE TABLE peer_keys (
+                user_uuid TEXT PRIMARY KEY,
+                ed25519_public BLOB NOT NULL,
+                fetched_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
         MessageStore { conn }
     }
 
@@ -238,27 +261,7 @@ mod tests {
     use base64::Engine;
 
     fn open_mem_store() -> MessageStore {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "
-            CREATE TABLE messages (
-                uuid TEXT PRIMARY KEY,
-                sender_uuid TEXT NOT NULL,
-                thread_uuid TEXT,
-                reply_to_uuid TEXT,
-                global_seq INTEGER NOT NULL,
-                key_epoch INTEGER NOT NULL DEFAULT 0,
-                ciphertext TEXT NOT NULL,
-                client_ts TEXT NOT NULL,
-                server_ts TEXT NOT NULL,
-                read INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX idx_messages_global_seq ON messages(global_seq);
-            CREATE INDEX idx_messages_thread ON messages(thread_uuid);
-            ",
-        )
-        .unwrap();
-        MessageStore { conn }
+        MessageStore::open_in_memory()
     }
 
     fn make_msg(seq: i64) -> Value {

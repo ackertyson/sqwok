@@ -51,10 +51,13 @@ impl ChatChannel {
         }
     }
 
+    fn topic(&self) -> String {
+        format!("chat:{}", self.chat_uuid)
+    }
+
     pub fn join_frame(&mut self) -> Frame {
-        let topic = format!("chat:{}", self.chat_uuid);
         let frame = Frame::join(
-            &topic,
+            &self.topic(),
             serde_json::json!({
                 "high_water": self.high_water
             }),
@@ -66,11 +69,10 @@ impl ChatChannel {
     /// Create a channel frame with the correct join_ref for this channel.
     /// Use this for all outgoing messages after joining.
     pub fn frame(&self, event: &str, payload: serde_json::Value) -> Frame {
-        let topic = format!("chat:{}", self.chat_uuid);
         Frame {
             join_ref: self.join_ref.clone(),
             ref_id: Some(crate::channel::protocol::next_ref()),
-            topic,
+            topic: self.topic(),
             event: event.to_string(),
             payload,
         }
@@ -429,34 +431,9 @@ impl ChatChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
 
     fn open_temp_store() -> MessageStore {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "
-            CREATE TABLE messages (
-                uuid TEXT PRIMARY KEY,
-                sender_uuid TEXT NOT NULL,
-                thread_uuid TEXT,
-                reply_to_uuid TEXT,
-                global_seq INTEGER NOT NULL,
-                key_epoch INTEGER NOT NULL DEFAULT 0,
-                ciphertext TEXT NOT NULL,
-                client_ts TEXT NOT NULL,
-                server_ts TEXT NOT NULL
-            );
-            CREATE INDEX idx_messages_global_seq ON messages(global_seq);
-            CREATE INDEX idx_messages_thread ON messages(thread_uuid);
-            CREATE TABLE peer_keys (
-                user_uuid TEXT PRIMARY KEY,
-                ed25519_public BLOB NOT NULL,
-                fetched_at TEXT NOT NULL
-            );
-            ",
-        )
-        .unwrap();
-        MessageStore::from_connection(conn)
+        MessageStore::open_in_memory()
     }
 
     fn make_test_channel() -> ChatChannel {

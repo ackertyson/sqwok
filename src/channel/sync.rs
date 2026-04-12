@@ -36,31 +36,9 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
-    use rusqlite::Connection;
 
     fn make_store_with_messages(count: i64) -> MessageStore {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "
-            CREATE TABLE messages (
-                uuid TEXT PRIMARY KEY,
-                sender_uuid TEXT NOT NULL,
-                thread_uuid TEXT,
-                reply_to_uuid TEXT,
-                global_seq INTEGER NOT NULL,
-                key_epoch INTEGER NOT NULL DEFAULT 0,
-                ciphertext TEXT NOT NULL,
-                client_ts TEXT NOT NULL,
-                server_ts TEXT NOT NULL,
-                read INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX idx_messages_global_seq ON messages(global_seq);
-            CREATE INDEX idx_messages_thread ON messages(thread_uuid);
-            ",
-        )
-        .unwrap();
-
-        let store = MessageStore::from_connection(conn);
+        let store = MessageStore::open_in_memory();
         for i in 1..=count {
             store
                 .insert_message(&serde_json::json!({

@@ -3,6 +3,8 @@ use base64::Engine;
 use std::path::Path;
 
 pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<()> {
+    let client = reqwest::Client::new();
+
     // Check for resume state
     let pending_path = identity_dir.join("pending_request");
     if pending_path.exists() {
@@ -12,7 +14,7 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
             "Resuming verification for request {}...",
             &request_uuid[..preview_len]
         );
-        return resume_from_polling(server_url, identity_dir, &request_uuid).await;
+        return resume_from_polling(&client, server_url, identity_dir, &request_uuid).await;
     }
 
     let email: String = dialoguer::Input::new()
@@ -46,7 +48,6 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
 
     let request_uuid = uuid::Uuid::new_v4().to_string();
 
-    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{}/api/register", server_url))
         .json(&serde_json::json!({
@@ -71,23 +72,24 @@ pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<(
     );
     println!("...then come back here...");
 
-    let (csr_code, totp_uri) = poll_for_verification(server_url, &request_uuid).await?;
+    let (csr_code, totp_uri) = poll_for_verification(&client, server_url, &request_uuid).await?;
 
     println!("\nEmail verified! Generating keys...");
 
     complete_registration(
+        &client,
         server_url,
         identity_dir,
         &request_uuid,
         csr_code.as_deref(),
         totp_uri.as_deref(),
         &screenname,
-        &pending_path,
     )
     .await
 }
 
 async fn resume_from_polling(
+    client: &reqwest::Client,
     server_url: &str,
     identity_dir: &Path,
     request_uuid: &str,
@@ -98,7 +100,6 @@ async fn resume_from_polling(
         .trim()
         .to_string();
 
-    let client = reqwest::Client::new();
     let url = format!("{}/api/verify/{}", server_url, request_uuid);
     let resp: serde_json::Value = client.get(&url).send().await?.json().await?;
 
@@ -108,13 +109,13 @@ async fn resume_from_polling(
             let csr_code = resp["csr_code"].as_str().map(|s| s.to_string());
             let totp_uri = resp["totp_uri"].as_str().map(|s| s.to_string());
             complete_registration(
+                client,
                 server_url,
                 identity_dir,
                 request_uuid,
                 csr_code.as_deref(),
                 totp_uri.as_deref(),
                 &screenname,
-                &pending_path,
             )
             .await
         }
@@ -124,15 +125,16 @@ async fn resume_from_polling(
         }
         Some("pending") => {
             println!("Still waiting for email verification...");
-            let (csr_code, totp_uri) = poll_for_verification(server_url, request_uuid).await?;
+            let (csr_code, totp_uri) =
+                poll_for_verification(client, server_url, request_uuid).await?;
             complete_registration(
+                client,
                 server_url,
                 identity_dir,
                 request_uuid,
                 csr_code.as_deref(),
                 totp_uri.as_deref(),
                 &screenname,
-                &pending_path,
             )
             .await
         }
@@ -141,10 +143,10 @@ async fn resume_from_polling(
 }
 
 async fn poll_for_verification(
+    client: &reqwest::Client,
     server_url: &str,
     request_uuid: &str,
 ) -> Result<(Option<String>, Option<String>)> {
-    let client = reqwest::Client::new();
     let url = format!("{}/api/verify/{}", server_url, request_uuid);
 
     for _ in 0..90 {
@@ -179,6 +181,15 @@ fn extract_totp_secret(totp_uri: &str) -> Option<String> {
         .map(|p| p["secret=".len()..].to_string())
 }
 
+fn qr_svg_path() -> Option<std::path::PathBuf> {
+    Some(
+        crate::config::home_dir()
+            .ok()?
+            .join(".sqwok")
+            .join("totp-qr.svg"),
+    )
+}
+
 fn write_qr_svg(totp_uri: &str) -> Option<String> {
     use qrcode::render::svg;
     use qrcode::QrCode;
@@ -187,10 +198,7 @@ fn write_qr_svg(totp_uri: &str) -> Option<String> {
         .ok()?
         .render::<svg::Color>()
         .build();
-    let path = crate::config::home_dir()
-        .ok()?
-        .join(".sqwok")
-        .join("totp-qr.svg");
+    let path = qr_svg_path()?;
     super::write_private(&path, svg.as_bytes()).ok()?;
     Some(format!("file://{}", path.display()))
 }
@@ -234,14 +242,15 @@ fn display_totp_prompt(totp_uri: &str) {
 }
 
 async fn complete_registration(
+    client: &reqwest::Client,
     server_url: &str,
     identity_dir: &Path,
     request_uuid: &str,
     csr_code: Option<&str>,
     totp_uri: Option<&str>,
     screenname: &str,
-    pending_path: &Path,
 ) -> Result<()> {
+    let pending_path = identity_dir.join("pending_request");
     let (key_pem, csr_pem) = generate_keypair_and_csr()?;
 
     if let Some(uri) = totp_uri {
@@ -249,8 +258,6 @@ async fn complete_registration(
     }
 
     let totp_code = prompt_totp_code()?;
-
-    let client = reqwest::Client::new();
 
     // Retry loop: only totp_code changes between attempts
     let mut current_totp_code = totp_code;
@@ -312,8 +319,8 @@ async fn complete_registration(
             std::fs::write(identity_dir.join("screenname"), screenname)?;
             std::fs::remove_file(pending_path).ok();
             std::fs::remove_file(identity_dir.join("pending_screenname")).ok();
-            if let Ok(home) = crate::config::home_dir() {
-                std::fs::remove_file(home.join(".sqwok").join("totp-qr.svg")).ok();
+            if let Some(p) = qr_svg_path() {
+                std::fs::remove_file(p).ok();
             }
 
             println!("\nSetup complete! Identity saved to {:?}", identity_dir);

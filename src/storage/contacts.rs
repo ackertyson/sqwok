@@ -14,6 +14,20 @@ pub struct Contact {
     pub updated_at: i64,
 }
 
+fn contact_from_row(row: &rusqlite::Row) -> rusqlite::Result<Contact> {
+    Ok(Contact {
+        uuid: row
+            .get::<_, String>(0)?
+            .parse()
+            .unwrap_or_else(|_| Uuid::nil()),
+        screenname: row.get(1)?,
+        last_seen_chat: row
+            .get::<_, Option<String>>(2)?
+            .and_then(|s| s.parse().ok()),
+        updated_at: row.get(3)?,
+    })
+}
+
 impl ContactStore {
     pub fn open() -> Result<Self> {
         let path = crate::config::home_dir()?
@@ -70,19 +84,7 @@ impl ContactStore {
              ORDER BY updated_at DESC
              LIMIT ?2",
         )?;
-        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
-            Ok(Contact {
-                uuid: row
-                    .get::<_, String>(0)?
-                    .parse()
-                    .unwrap_or_else(|_| Uuid::nil()),
-                screenname: row.get(1)?,
-                last_seen_chat: row
-                    .get::<_, Option<String>>(2)?
-                    .and_then(|s| s.parse().ok()),
-                updated_at: row.get(3)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![pattern, limit as i64], contact_from_row)?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
@@ -147,19 +149,7 @@ impl ContactStore {
              ORDER BY updated_at DESC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
-            Ok(Contact {
-                uuid: row
-                    .get::<_, String>(0)?
-                    .parse()
-                    .unwrap_or_else(|_| Uuid::nil()),
-                screenname: row.get(1)?,
-                last_seen_chat: row
-                    .get::<_, Option<String>>(2)?
-                    .and_then(|s| s.parse().ok()),
-                updated_at: row.get(3)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![limit as i64], contact_from_row)?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 }
