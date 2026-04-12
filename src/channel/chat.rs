@@ -1,4 +1,3 @@
-use crate::dlog;
 use anyhow::Result;
 use base64::Engine;
 use ed25519_dalek::VerifyingKey;
@@ -231,13 +230,6 @@ impl ChatChannel {
         let high = self.store.get_high_water().unwrap_or(0);
         let low = self.store.get_low_water().unwrap_or(0);
         let requester = payload["requester"].as_str().unwrap_or("");
-        let from_seq = payload["from_seq"].as_i64();
-        let to_seq = payload["to_seq"].as_i64();
-        dlog!(
-            "[SYNC] handle_sync_query: requester={} from_seq={:?} to_seq={:?} → responding low_water={} high_water={}",
-            requester, from_seq, to_seq, low, high
-        );
-
         Ok(Some(self.frame(
             "sync:offer",
             serde_json::json!({
@@ -250,11 +242,6 @@ impl ChatChannel {
 
     fn handle_sync_push(&mut self, payload: &Value) -> Result<()> {
         if let Some(messages) = payload["messages"].as_array() {
-            dlog!(
-                "[SYNC] handle_sync_push: received {} messages, current high_water={}",
-                messages.len(),
-                self.high_water
-            );
             for msg in messages {
                 self.store.insert_message(msg)?;
                 let seq = msg["global_seq"].as_i64().unwrap_or(0);
@@ -262,10 +249,6 @@ impl ChatChannel {
                     self.high_water = seq;
                 }
             }
-            dlog!(
-                "[SYNC] handle_sync_push: new high_water={}",
-                self.high_water
-            );
         }
         Ok(())
     }
@@ -276,32 +259,13 @@ impl ChatChannel {
             .ok_or_else(|| anyhow::anyhow!("key:distribute missing sender_id"))?
             .to_string();
 
-        dlog!("key:distribute received from sender={}", sender_id);
-
-        let bundle = match parse_key_bundle_from_wire(payload) {
-            Ok(b) => b,
-            Err(e) => {
-                dlog!("key:distribute parse_bundle FAILED: {}", e);
-                return Err(e);
-            }
-        };
-        let sender_ed25519 = match self.get_peer_ed25519(&sender_id, false) {
-            Ok(k) => k,
-            Err(e) => {
-                dlog!(
-                    "key:distribute get_peer_ed25519({}) FAILED: {}",
-                    sender_id,
-                    e
-                );
-                return Err(e);
-            }
-        };
+        let bundle = parse_key_bundle_from_wire(payload)?;
+        let sender_ed25519 = self.get_peer_ed25519(&sender_id, false)?;
         let sender_x25519 = ed25519_to_x25519_public(&sender_ed25519)
             .ok_or_else(|| anyhow::anyhow!("invalid sender Ed25519 key"))?;
 
         if let Some(crypto) = &mut self.crypto {
             crypto.receive_key_bundle(&sender_x25519, &sender_ed25519, &bundle)?;
-            dlog!("key:distribute applied (already had keys)");
         } else {
             let identity_dir = self.identity_dir.clone();
             let chat_dir = self.chat_dir.clone();
@@ -309,7 +273,6 @@ impl ChatChannel {
                 .unwrap_or_else(|| ChatCrypto::from_empty(&identity_dir, &chat_dir).unwrap());
             crypto.receive_key_bundle(&sender_x25519, &sender_ed25519, &bundle)?;
             self.crypto = Some(crypto);
-            dlog!("key:distribute applied — first keys received!");
         }
 
         Ok(())
@@ -320,45 +283,22 @@ impl ChatChannel {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("key:request missing requester_id"))?;
 
-        dlog!("key:request received from requester={}", requester_id);
-
         if requester_id == self.user_uuid.to_string() {
-            dlog!("key:request — ignoring (is ourselves)");
             return Ok(None);
         }
 
         let crypto = match &self.crypto {
             Some(c) => c,
-            None => {
-                dlog!("key:request — we have NO crypto, cannot respond");
-                return Ok(None);
-            }
+            None => return Ok(None),
         };
 
-        let requester_ed25519 = match self.get_peer_ed25519(requester_id, true) {
-            Ok(k) => {
-                dlog!("key:request — fetched peer ed25519 for {}", requester_id);
-                k
-            }
-            Err(e) => {
-                dlog!(
-                    "key:request — get_peer_ed25519({}) FAILED: {}",
-                    requester_id,
-                    e
-                );
-                return Err(e);
-            }
-        };
+        let requester_ed25519 = self.get_peer_ed25519(requester_id, true)?;
         let requester_x25519 = ed25519_to_x25519_public(&requester_ed25519)
             .ok_or_else(|| anyhow::anyhow!("invalid requester Ed25519 key"))?;
 
         let bundle = crypto.prepare_key_bundle(&requester_x25519, true)?;
         let wire_payload = bundle_to_wire_payload(&bundle, requester_id);
 
-        dlog!(
-            "key:request — responding with key:distribute to {}",
-            requester_id
-        );
         Ok(Some(self.frame("key:distribute", wire_payload)))
     }
 
@@ -377,7 +317,6 @@ impl ChatChannel {
     pub fn get_peer_ed25519(&self, user_uuid: &str, force_refresh: bool) -> Result<VerifyingKey> {
         if !force_refresh {
             if let Some(key_bytes) = self.store.get_peer_key(user_uuid)? {
-                dlog!("get_peer_ed25519({}) — found in local cache", user_uuid);
                 let arr: [u8; 32] = key_bytes
                     .try_into()
                     .map_err(|_| anyhow::anyhow!("cached key wrong length for {}", user_uuid))?;
@@ -386,11 +325,6 @@ impl ChatChannel {
         }
 
         let url = format!("{}/api/users/{}/e2e_key", self.server_url, user_uuid);
-        dlog!(
-            "get_peer_ed25519({}) — fetching from server (force_refresh={})",
-            user_uuid,
-            force_refresh
-        );
         let token = crate::auth::token::build_token(&self.identity_dir, &self.server_url)?;
 
         let resp: serde_json::Value = tokio::task::block_in_place(|| {
@@ -403,23 +337,12 @@ impl ChatChannel {
                 .map_err(|e| anyhow::anyhow!("JSON parse failed: {}", e))
         })?;
 
-        dlog!(
-            "get_peer_ed25519({}) — server response: {}",
-            user_uuid,
-            resp
-        );
-
         let key_b64 = resp["e2e_public_key"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("no e2e key for user {}", user_uuid))?;
         let key_bytes = base64::engine::general_purpose::STANDARD.decode(key_b64)?;
 
         self.store.store_peer_key(user_uuid, &key_bytes)?;
-        dlog!(
-            "get_peer_ed25519({}) — stored in cache, {} bytes",
-            user_uuid,
-            key_bytes.len()
-        );
 
         let arr: [u8; 32] = key_bytes
             .try_into()

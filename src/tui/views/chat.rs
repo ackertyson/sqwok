@@ -632,19 +632,6 @@ fn draw_row(frame: &mut Frame, area: Rect, row: &RenderRow, is_selected: bool, a
             let mut lines: Vec<Line> = Vec::new();
             let wrapped = wrap_words(&full_body, first_avail, cont_avail);
             let n = wrapped.len();
-            // Detect height mismatches: if the computed line count doesn't match the
-            // allocated area height, stale buffer content can bleed through.
-            if n as u16 != area.height {
-                crate::dlog!(
-                    "MSG HEIGHT MISMATCH: area.h={} lines={} w={} prefix={} ts={} body={:?}",
-                    area.height,
-                    n,
-                    avail_width,
-                    prefix_len,
-                    ts_len,
-                    &full_body.chars().take(40).collect::<String>()
-                );
-            }
             let mention_style = Style::default()
                 .fg(s::mention_inline_fg())
                 .bg(s::mention_inline_bg());

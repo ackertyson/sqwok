@@ -2,7 +2,6 @@ mod auth;
 mod channel;
 mod config;
 mod crypto;
-pub mod debug_log;
 mod identity;
 mod net;
 mod storage;
@@ -71,9 +70,6 @@ async fn main() -> Result<()> {
 
     let identity_dir = cli.identity.unwrap_or_else(config::identity_dir);
     let server_url = cli.server.unwrap_or_else(config::server_url);
-
-    debug_log::init();
-    dlog!("sqwok starting — server={}", server_url);
 
     // Restore terminal before printing panic so the message is readable.
     std::panic::set_hook(Box::new(|info| {

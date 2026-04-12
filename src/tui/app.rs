@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::dlog;
 use ratatui::widgets::ListState;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -502,11 +501,6 @@ impl AppState {
         let _ = self.ws_tx.send(frame.encode());
         self.last_typing_notify = Some(Instant::now());
         self.last_typing_target = Some(editing);
-        dlog!(
-            "typing:notify sent thread={:?} reply_to={:?}",
-            thread_uuid,
-            reply_to_uuid
-        );
     }
 
     pub fn move_selection(&mut self, delta: i32) {
@@ -1004,68 +998,63 @@ impl AppState {
         let thread_ref = thread_uuid.as_deref();
         let reply_ref = reply_to_uuid.as_deref();
 
-        match chat.send_message(&wire_text, thread_ref, reply_ref) {
-            Ok(frame) => {
-                // Extract UUID and timestamp for optimistic display
-                let msg_uuid = frame.payload["uuid"].as_str().unwrap_or("").to_string();
-                let ts = frame.payload["ts"].as_str().unwrap_or("").to_string();
+        if let Ok(frame) = chat.send_message(&wire_text, thread_ref, reply_ref) {
+            // Extract UUID and timestamp for optimistic display
+            let msg_uuid = frame.payload["uuid"].as_str().unwrap_or("").to_string();
+            let ts = frame.payload["ts"].as_str().unwrap_or("").to_string();
 
-                let _ = self.ws_tx.send(frame.encode());
+            let _ = self.ws_tx.send(frame.encode());
 
-                // Optimistically display the sent message immediately (render tags → @name).
-                let mentioned_names_opt =
-                    super::mention::extract_mentioned_names(&wire_text, &self.name_cache);
-                let display_body = super::mention::render_body(&wire_text, &self.name_cache);
-                if !msg_uuid.is_empty() {
-                    let msg = DisplayMessage {
-                        uuid: msg_uuid.clone(),
-                        sender_uuid: self.my_uuid.clone(),
-                        sender_name: self.my_screenname.clone(),
-                        body: display_body,
-                        timestamp: ts,
-                        global_seq: i64::MAX, // sort to end until server assigns real seq
-                        thread_uuid: thread_uuid.clone(),
-                        reply_to_uuid: reply_to_uuid.clone(),
-                        pending: true,
-                        read: true,
-                        mentions_me: false, // own messages are never self-mentions
-                        mentioned_names: mentioned_names_opt,
-                    };
-                    self.highlights.insert(msg_uuid, Instant::now());
-                    self.msg_store.insert(msg);
-                    // Auto-scroll: stay in the current thread context after sending.
-                    // Depth-2 reply inputs are only rendered while editing, so we must
-                    // restore the editing target before rebuilding rows; otherwise the
-                    // Input row won't appear in the list and the lookup falls back to the
-                    // bottom of the main chat. Depth-1 thread inputs always render, so
-                    // this is a no-op for that case (editing was already cleared by take_input).
-                    if matches!(&editing_target, Some(InputTarget::Reply(..))) {
-                        self.panes[self.active_pane].editing = editing_target.clone();
-                    }
-                    // Find the input row matching the context we just sent from.
-                    let rows = self.build_render_rows();
-                    let effective_target = editing_target
-                        .as_ref()
-                        .cloned()
-                        .unwrap_or(InputTarget::MainChat);
-                    let target_idx = rows.iter().position(|r| {
-                        if let RenderRow::Input {
-                            thread_uuid: row_thread,
-                            reply_to_uuid: row_reply,
-                            ..
-                        } = r
-                        {
-                            effective_target.matches_input_row(row_thread, row_reply)
-                        } else {
-                            false
-                        }
-                    });
-                    let pane = &mut self.panes[self.active_pane];
-                    pane.selected = target_idx.unwrap_or_else(|| rows.len().saturating_sub(1));
+            // Optimistically display the sent message immediately (render tags → @name).
+            let mentioned_names_opt =
+                super::mention::extract_mentioned_names(&wire_text, &self.name_cache);
+            let display_body = super::mention::render_body(&wire_text, &self.name_cache);
+            if !msg_uuid.is_empty() {
+                let msg = DisplayMessage {
+                    uuid: msg_uuid.clone(),
+                    sender_uuid: self.my_uuid.clone(),
+                    sender_name: self.my_screenname.clone(),
+                    body: display_body,
+                    timestamp: ts,
+                    global_seq: i64::MAX, // sort to end until server assigns real seq
+                    thread_uuid: thread_uuid.clone(),
+                    reply_to_uuid: reply_to_uuid.clone(),
+                    pending: true,
+                    read: true,
+                    mentions_me: false, // own messages are never self-mentions
+                    mentioned_names: mentioned_names_opt,
+                };
+                self.highlights.insert(msg_uuid, Instant::now());
+                self.msg_store.insert(msg);
+                // Auto-scroll: stay in the current thread context after sending.
+                // Depth-2 reply inputs are only rendered while editing, so we must
+                // restore the editing target before rebuilding rows; otherwise the
+                // Input row won't appear in the list and the lookup falls back to the
+                // bottom of the main chat. Depth-1 thread inputs always render, so
+                // this is a no-op for that case (editing was already cleared by take_input).
+                if matches!(&editing_target, Some(InputTarget::Reply(..))) {
+                    self.panes[self.active_pane].editing = editing_target.clone();
                 }
-            }
-            Err(e) => {
-                dlog!("send error: {}", e);
+                // Find the input row matching the context we just sent from.
+                let rows = self.build_render_rows();
+                let effective_target = editing_target
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or(InputTarget::MainChat);
+                let target_idx = rows.iter().position(|r| {
+                    if let RenderRow::Input {
+                        thread_uuid: row_thread,
+                        reply_to_uuid: row_reply,
+                        ..
+                    } = r
+                    {
+                        effective_target.matches_input_row(row_thread, row_reply)
+                    } else {
+                        false
+                    }
+                });
+                let pane = &mut self.panes[self.active_pane];
+                pane.selected = target_idx.unwrap_or_else(|| rows.len().saturating_sub(1));
             }
         }
     }
@@ -1098,24 +1087,14 @@ impl AppState {
         let topic = format!("chat:{}", chat.chat_uuid);
         let mut distributed = 0u32;
 
-        dlog!(
-            "rotate_and_distribute: {} total members",
-            self.members.len()
-        );
         for member in &self.members {
             if member.uuid == my_uuid {
                 continue;
             }
-            dlog!("rotate_and_distribute: trying member {}", member.uuid);
             // Fetch peer Ed25519 key from local cache or server
             let peer_ed25519 = match chat.get_peer_ed25519(&member.uuid, true) {
                 Ok(k) => k,
-                Err(e) => {
-                    dlog!(
-                        "rotate_and_distribute: get_peer_ed25519({}) FAILED: {}",
-                        member.uuid,
-                        e
-                    );
+                Err(_) => {
                     continue;
                 }
             };
@@ -1383,10 +1362,7 @@ impl AppState {
 
         let store = match SqlMessageStore::open(&chat_uuid) {
             Ok(s) => s,
-            Err(e) => {
-                dlog!("Cannot open message store: {}", e);
-                return;
-            }
+            Err(_) => return,
         };
 
         let crypto = crate::crypto::ChatCrypto::load(&self.identity_dir, &chat_dir)
@@ -1426,28 +1402,20 @@ impl AppState {
 
         // Request keys if we don't have them
         if !self.has_keys {
-            dlog!("join_chat({}) — no keys, sending key:request", chat_uuid);
             if let Some(ref ch) = self.chat_channel {
                 let req = ch.key_request_frame();
                 let _ = self.ws_tx.send(req.encode());
             }
-        } else {
-            dlog!("join_chat({}) — already have keys", chat_uuid);
         }
 
         // Request message catchup from peers
         if let Some(ref ch) = self.chat_channel {
-            dlog!(
-                "[SYNC] requesting sync:catchup with high_water={}",
-                ch.high_water
-            );
             let sync = ch.sync_catchup_frame();
             let _ = self.ws_tx.send(sync.encode());
         }
     }
 
     pub fn handle_frame(&mut self, frame: &Frame) {
-        dlog!("frame: event={} topic={}", frame.event, frame.topic);
         match frame.event.as_str() {
             "msg:new" => self.handle_msg_new(&frame.payload),
             "member_list" => self.handle_member_list(&frame.payload),
@@ -1489,38 +1457,21 @@ impl AppState {
             }
             "key:distribute" | "key:request" | "phx_reply" | "phx_error" | "sync:assign"
             | "sync:query" => {
-                if frame.event == "sync:query" {
-                    dlog!(
-                        "[SYNC] sync:query arrived in frame dispatch, payload={}",
-                        frame.payload
-                    );
-                }
                 // Delegate to ChatChannel for crypto/sync handling
                 if let Some(ref mut ch) = self.chat_channel {
                     match ch.handle_incoming(frame) {
                         Ok(Some(reply)) => {
-                            dlog!("handle_incoming({}) → sending reply frame", frame.event);
                             let _ = self.ws_tx.send(reply.encode());
                         }
-                        Ok(None) => {
-                            dlog!("handle_incoming({}) → no reply", frame.event);
-                        }
-                        Err(e) => {
-                            dlog!("handle_incoming({}) → ERROR: {}", frame.event, e);
-                        }
+                        Ok(None) => {}
+                        Err(_) => {}
                     }
                     // Update has_keys; if we just got keys, re-decrypt stored messages
                     let had_keys = self.has_keys;
                     self.has_keys = ch.crypto.is_some();
                     if !had_keys && self.has_keys {
-                        dlog!("has_keys changed false→true — redecrypting stored messages");
                         self.redecrypt_stored_messages();
                     }
-                } else {
-                    dlog!(
-                        "handle_frame({}) — no chat_channel to delegate to!",
-                        frame.event
-                    );
                 }
                 // For sync:assign, build sync responses
                 if frame.event == "sync:assign" {
@@ -1529,20 +1480,13 @@ impl AppState {
                         let from = frame.payload["from_seq"].as_i64().unwrap_or(0);
                         let to = frame.payload["to_seq"].as_i64().unwrap_or(0);
                         let topic = &frame.topic;
-                        match crate::channel::sync::build_sync_responses(
+                        if let Ok(frames) = crate::channel::sync::build_sync_responses(
                             &ch.store, requester, from, to, topic,
                         ) {
-                            Ok(frames) => {
-                                dlog!(
-                                    "[SYNC] sync:assign: requester={} from={} to={} → built {} frames",
-                                    requester, from, to, frames.len()
-                                );
-                                for mut f in frames {
-                                    f.join_ref = ch.join_ref.clone();
-                                    let _ = self.ws_tx.send(f.encode());
-                                }
+                            for mut f in frames {
+                                f.join_ref = ch.join_ref.clone();
+                                let _ = self.ws_tx.send(f.encode());
                             }
-                            Err(e) => dlog!("sync error: {}", e),
                         }
                     }
                 }
@@ -1760,53 +1704,27 @@ impl AppState {
 
         // Proactively distribute keys to newly joined members
         if !new_joins.is_empty() {
-            dlog!(
-                "presence_diff: {} new join(s): {:?}",
-                new_joins.len(),
-                new_joins
-            );
             if let Some(ref chat) = self.chat_channel {
                 if chat.crypto.is_some() {
                     for uuid in &new_joins {
-                        dlog!("presence_diff: distributing keys to new member {}", uuid);
-                        match chat.get_peer_ed25519(uuid, true) {
-                            Ok(peer_ed25519) => {
-                                match crate::crypto::identity::ed25519_to_x25519_public(
-                                    &peer_ed25519,
-                                ) {
-                                    Some(peer_x25519) => {
-                                        if let Some(ref crypto) = chat.crypto {
-                                            match crypto.prepare_key_bundle(&peer_x25519, true) {
-                                                Ok(bundle) => {
-                                                    let wire = crate::crypto::bundle_to_wire_payload(
-                                                        &bundle, uuid,
-                                                    );
-                                                    let frame = chat.frame("key:distribute", wire);
-                                                    dlog!("presence_diff: sending key:distribute to {} (topic={})", uuid, chat.chat_uuid);
-                                                    let _ = self.ws_tx.send(frame.encode());
-                                                }
-                                                Err(e) => dlog!("presence_diff: prepare_key_bundle FAILED for {}: {}", uuid, e),
-                                            }
-                                        } else {
-                                            dlog!("presence_diff: crypto vanished mid-loop?!");
-                                        }
+                        if let Ok(peer_ed25519) = chat.get_peer_ed25519(uuid, true) {
+                            if let Some(peer_x25519) =
+                                crate::crypto::identity::ed25519_to_x25519_public(&peer_ed25519)
+                            {
+                                if let Some(ref crypto) = chat.crypto {
+                                    if let Ok(bundle) =
+                                        crypto.prepare_key_bundle(&peer_x25519, true)
+                                    {
+                                        let wire =
+                                            crate::crypto::bundle_to_wire_payload(&bundle, uuid);
+                                        let frame = chat.frame("key:distribute", wire);
+                                        let _ = self.ws_tx.send(frame.encode());
                                     }
-                                    None => dlog!(
-                                        "presence_diff: ed25519_to_x25519 returned None for {}",
-                                        uuid
-                                    ),
                                 }
-                            }
-                            Err(e) => {
-                                dlog!("presence_diff: get_peer_ed25519({}) FAILED: {}", uuid, e)
                             }
                         }
                     }
-                } else {
-                    dlog!("presence_diff: we have no crypto, skipping key distribution");
                 }
-            } else {
-                dlog!("presence_diff: no chat_channel, skipping key distribution");
             }
         }
         self.update_title();
