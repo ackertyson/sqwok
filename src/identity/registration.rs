@@ -179,6 +179,22 @@ fn extract_totp_secret(totp_uri: &str) -> Option<String> {
         .map(|p| p["secret=".len()..].to_string())
 }
 
+fn write_qr_svg(totp_uri: &str) -> Option<String> {
+    use qrcode::render::svg;
+    use qrcode::QrCode;
+
+    let svg = QrCode::new(totp_uri.as_bytes())
+        .ok()?
+        .render::<svg::Color>()
+        .build();
+    let path = crate::config::home_dir()
+        .ok()?
+        .join(".sqwok")
+        .join("totp-qr.svg");
+    super::write_private(&path, svg.as_bytes()).ok()?;
+    Some(format!("file://{}", path.display()))
+}
+
 fn display_totp_prompt(totp_uri: &str) {
     use qrcode::render::unicode;
     use qrcode::QrCode;
@@ -186,17 +202,19 @@ fn display_totp_prompt(totp_uri: &str) {
     match QrCode::new(totp_uri.as_bytes()) {
         Ok(code) => {
             let image = code.render::<unicode::Dense1x2>().build();
-            println!("{}", image);
+            println!("{image}");
         }
         Err(e) => {
-            eprintln!("(Could not render QR code: {})", e);
+            eprintln!("(Could not render QR code: {e})");
         }
     }
 
+    let svg_url = write_qr_svg(totp_uri);
     let secret =
         extract_totp_secret(totp_uri).unwrap_or_else(|| "(could not extract secret)".to_string());
 
     const YELLOW: &str = "\x1b[33m";
+    const DIM: &str = "\x1b[2m";
     const R: &str = "\x1b[0m";
     println!("┌─────────────────────────────────────────────────────────────┐");
     println!("│  {YELLOW}!! ALREADY HAVE SQWOK IN YOUR AUTHENTICATOR APP? !!{R}        │");
@@ -205,6 +223,11 @@ fn display_totp_prompt(totp_uri: &str) {
     println!("├─────────────────────────────────────────────────────────────┤");
     println!("│  New user: scan the QR code above with your authenticator,  │");
     println!("│  then enter the 6-digit code below.                         │");
+    if let Some(url) = svg_url {
+        println!("│                                                             │");
+        println!("│  QR look wrong? Open in browser:                            │");
+        println!("│  {DIM}{:<59}{R}│", url);
+    }
     println!("│                                                             │");
     println!("│  Manual entry key: {:<41}│", secret);
     println!("└─────────────────────────────────────────────────────────────┘");
@@ -289,6 +312,9 @@ async fn complete_registration(
             std::fs::write(identity_dir.join("screenname"), screenname)?;
             std::fs::remove_file(pending_path).ok();
             std::fs::remove_file(identity_dir.join("pending_screenname")).ok();
+            if let Ok(home) = crate::config::home_dir() {
+                std::fs::remove_file(home.join(".sqwok").join("totp-qr.svg")).ok();
+            }
 
             println!("\nSetup complete! Identity saved to {:?}", identity_dir);
             println!("User UUID: {}", user_uuid);

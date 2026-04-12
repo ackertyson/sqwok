@@ -1,9 +1,6 @@
 use anyhow::Result;
 use std::path::Path;
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 pub fn save_credentials(
     dir: &Path,
     key_pem: &str,
@@ -14,10 +11,7 @@ pub fn save_credentials(
     std::fs::create_dir_all(dir)?;
 
     let key_path = dir.join("private_key.pem");
-    std::fs::write(&key_path, key_pem)?;
-
-    #[cfg(unix)]
-    std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
+    super::write_private(&key_path, key_pem.as_bytes())?;
 
     std::fs::write(dir.join("cert.pem"), cert_pem)?;
     std::fs::write(dir.join("ca.pem"), ca_pem)?;
