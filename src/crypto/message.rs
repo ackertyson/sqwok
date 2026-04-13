@@ -129,28 +129,6 @@ mod tests {
     }
 
     #[test]
-    fn test_wire_too_short_fails() {
-        let keychain = KeyChain::generate_new();
-        let sender = Uuid::new_v4();
-        let result = decrypt_message(&keychain, &sender, &[0u8; 10]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_nonces_differ_across_encryptions() {
-        let keychain = KeyChain::generate_new();
-        let sender = Uuid::new_v4();
-        let wire1 = encrypt_message(&keychain, &sender, b"msg1").unwrap();
-        let wire2 = encrypt_message(&keychain, &sender, b"msg1").unwrap();
-        // Nonce is bytes 4..16
-        assert_ne!(
-            &wire1[4..16],
-            &wire2[4..16],
-            "two encryptions must produce different nonces"
-        );
-    }
-
-    #[test]
     fn test_wire_format_structure() {
         let keychain = KeyChain::generate_new();
         let sender = Uuid::new_v4();

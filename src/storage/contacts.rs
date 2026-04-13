@@ -29,6 +29,31 @@ fn contact_from_row(row: &rusqlite::Row) -> rusqlite::Result<Contact> {
 }
 
 impl ContactStore {
+    #[cfg(test)]
+    fn open_in_memory() -> Self {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS contacts (
+                uuid TEXT PRIMARY KEY,
+                screenname TEXT NOT NULL,
+                last_seen_chat TEXT,
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_contacts_screenname
+            ON contacts(screenname COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS chat_scroll (
+                chat_uuid TEXT PRIMARY KEY,
+                msg_uuid  TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                uuid TEXT PRIMARY KEY,
+                blocked_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+            );",
+        )
+        .unwrap();
+        Self { conn }
+    }
+
     pub fn open() -> Result<Self> {
         let path = crate::config::home_dir()?
             .join(".sqwok")
@@ -151,5 +176,112 @@ impl ContactStore {
         )?;
         let rows = stmt.query_map(params![limit as i64], contact_from_row)?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_upsert_and_screenname_for() {
+        let store = ContactStore::open_in_memory();
+        let uuid = Uuid::new_v4();
+        store.upsert(uuid, "alice", None).unwrap();
+        let name = store.screenname_for(&uuid.to_string()).unwrap();
+        assert_eq!(name.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn test_upsert_updates_screenname() {
+        let store = ContactStore::open_in_memory();
+        let uuid = Uuid::new_v4();
+        store.upsert(uuid, "alice", None).unwrap();
+        store.upsert(uuid, "alice2", None).unwrap();
+        let name = store.screenname_for(&uuid.to_string()).unwrap();
+        assert_eq!(name.as_deref(), Some("alice2"));
+    }
+
+    #[test]
+    fn test_screenname_for_missing_returns_none() {
+        let store = ContactStore::open_in_memory();
+        let result = store.screenname_for(&Uuid::new_v4().to_string()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_search_case_insensitive() {
+        let store = ContactStore::open_in_memory();
+        store.upsert(Uuid::new_v4(), "AliceSmith", None).unwrap();
+        store.upsert(Uuid::new_v4(), "BobAlice", None).unwrap();
+        store.upsert(Uuid::new_v4(), "Charlie", None).unwrap();
+
+        let results = store.search("alice", 10).unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results
+            .iter()
+            .all(|c| c.screenname.to_lowercase().contains("alice")));
+    }
+
+    #[test]
+    fn test_search_respects_limit() {
+        let store = ContactStore::open_in_memory();
+        for i in 0..5 {
+            store
+                .upsert(Uuid::new_v4(), &format!("user{}", i), None)
+                .unwrap();
+        }
+        let results = store.search("user", 3).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_scroll_roundtrip() {
+        let store = ContactStore::open_in_memory();
+        let chat = Uuid::new_v4().to_string();
+        let msg = Uuid::new_v4().to_string();
+
+        assert!(store.load_scroll(&chat).unwrap().is_none());
+        store.save_scroll(&chat, &msg).unwrap();
+        assert_eq!(
+            store.load_scroll(&chat).unwrap().as_deref(),
+            Some(msg.as_str())
+        );
+    }
+
+    #[test]
+    fn test_scroll_update() {
+        let store = ContactStore::open_in_memory();
+        let chat = Uuid::new_v4().to_string();
+        let msg1 = Uuid::new_v4().to_string();
+        let msg2 = Uuid::new_v4().to_string();
+
+        store.save_scroll(&chat, &msg1).unwrap();
+        store.save_scroll(&chat, &msg2).unwrap();
+        assert_eq!(
+            store.load_scroll(&chat).unwrap().as_deref(),
+            Some(msg2.as_str())
+        );
+    }
+
+    #[test]
+    fn test_block_unblock() {
+        let store = ContactStore::open_in_memory();
+        let uuid = Uuid::new_v4().to_string();
+
+        assert!(store.blocked_uuids().unwrap().is_empty());
+        store.block(&uuid).unwrap();
+        assert_eq!(store.blocked_uuids().unwrap(), vec![uuid.clone()]);
+        store.unblock(&uuid).unwrap();
+        assert!(store.blocked_uuids().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_block_is_idempotent() {
+        let store = ContactStore::open_in_memory();
+        let uuid = Uuid::new_v4().to_string();
+        store.block(&uuid).unwrap();
+        store.block(&uuid).unwrap(); // INSERT OR IGNORE — must not error
+        assert_eq!(store.blocked_uuids().unwrap().len(), 1);
     }
 }

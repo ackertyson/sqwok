@@ -310,4 +310,80 @@ mod tests {
         assert_eq!(range[0]["global_seq"], 2);
         assert_eq!(range[2]["global_seq"], 4);
     }
+
+    #[test]
+    fn test_mark_read() {
+        let store = open_mem_store();
+        store.insert_message(&make_msg(1)).unwrap();
+
+        let before = store.get_range(1, 1).unwrap();
+        assert_eq!(before[0]["read"], 0);
+
+        store
+            .mark_read(&format!("00000000-0000-0000-0000-{:012}", 1))
+            .unwrap();
+
+        let after = store.get_range(1, 1).unwrap();
+        assert_eq!(after[0]["read"], 1);
+    }
+
+    #[test]
+    fn test_peer_key_roundtrip() {
+        let store = open_mem_store();
+        let user = "user-uuid-1";
+        let key = vec![0xABu8; 32];
+
+        assert!(store.get_peer_key(user).unwrap().is_none());
+        store.store_peer_key(user, &key).unwrap();
+        assert_eq!(store.get_peer_key(user).unwrap(), Some(key));
+    }
+
+    #[test]
+    fn test_peer_key_replace() {
+        let store = open_mem_store();
+        let user = "user-uuid-1";
+        let key1 = vec![0x01u8; 32];
+        let key2 = vec![0x02u8; 32];
+        store.store_peer_key(user, &key1).unwrap();
+        store.store_peer_key(user, &key2).unwrap();
+        assert_eq!(store.get_peer_key(user).unwrap(), Some(key2));
+    }
+
+    fn make_thread_reply(seq: i64, thread_uuid: &str) -> Value {
+        let mut msg = make_msg(seq);
+        msg["thread_uuid"] = serde_json::Value::String(thread_uuid.to_string());
+        msg
+    }
+
+    #[test]
+    fn test_get_recent_includes_thread_replies() {
+        let store = open_mem_store();
+        // Top-level message at seq 1
+        let top = make_msg(1);
+        let top_uuid = top["uuid"].as_str().unwrap().to_string();
+        store.insert_message(&top).unwrap();
+        // Thread reply at seq 2
+        store
+            .insert_message(&make_thread_reply(2, &top_uuid))
+            .unwrap();
+
+        let recent = store.get_recent(50).unwrap();
+        assert_eq!(recent.len(), 2);
+        // Top-level comes first (reversed from DESC), reply follows
+        assert_eq!(recent[0]["global_seq"], 1);
+        assert_eq!(recent[1]["global_seq"], 2);
+    }
+
+    #[test]
+    fn test_get_before_paginates() {
+        let store = open_mem_store();
+        for i in 1..=5 {
+            store.insert_message(&make_msg(i)).unwrap();
+        }
+        // Fetch top-level messages before seq 4, limit 2
+        let page = store.get_before(4, 2).unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0]["global_seq"], 2);
+        assert_eq!(page[1]["global_seq"], 3);
+    }
 }

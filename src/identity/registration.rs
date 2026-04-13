@@ -374,3 +374,44 @@ fn generate_keypair_and_csr() -> Result<(String, String)> {
 
     Ok((key_pem, csr_pem))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_totp_secret() {
+        let uri = "otpauth://totp/sqwok:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=sqwok";
+        assert_eq!(
+            extract_totp_secret(uri).as_deref(),
+            Some("JBSWY3DPEHPK3PXP")
+        );
+    }
+
+    #[test]
+    fn test_extract_totp_secret_among_multiple_params() {
+        let uri = "otpauth://totp/sqwok:alice?algorithm=SHA1&digits=6&secret=ABCDEF&period=30";
+        assert_eq!(extract_totp_secret(uri).as_deref(), Some("ABCDEF"));
+    }
+
+    #[test]
+    fn test_extract_totp_secret_missing_returns_none() {
+        let uri = "otpauth://totp/sqwok:alice?issuer=sqwok";
+        assert!(extract_totp_secret(uri).is_none());
+    }
+
+    #[test]
+    fn test_extract_totp_secret_no_query_string_returns_none() {
+        assert!(extract_totp_secret("otpauth://totp/sqwok").is_none());
+    }
+
+    #[test]
+    fn test_generate_keypair_and_csr_produces_pem() {
+        let (key_pem, csr_pem) = generate_keypair_and_csr().unwrap();
+        assert!(key_pem.contains("PRIVATE KEY"), "key should be PEM-encoded");
+        assert!(
+            csr_pem.contains("CERTIFICATE REQUEST"),
+            "CSR should be PEM-encoded"
+        );
+    }
+}
