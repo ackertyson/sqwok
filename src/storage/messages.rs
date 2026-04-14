@@ -127,15 +127,6 @@ impl MessageStore {
         Ok(hw)
     }
 
-    pub fn get_low_water(&self) -> Result<i64> {
-        let lw: i64 = self.conn.query_row(
-            "SELECT COALESCE(MIN(global_seq), 0) FROM messages",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(lw)
-    }
-
     pub fn get_range(&self, from_seq: i64, to_seq: i64) -> Result<Vec<Value>> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, sender_uuid, thread_uuid, reply_to_uuid, global_seq,
@@ -227,6 +218,52 @@ impl MessageStore {
         messages.extend(replies);
 
         Ok(messages)
+    }
+
+    /// Return contiguous sequence ranges held in [from_seq, to_seq], capped at `cap` pairs.
+    /// If more gaps exist than the cap allows, the final segment extends to the local maximum
+    /// (a slight over-claim that is acceptable for best-effort sync).
+    pub fn get_segments_in_range(
+        &self,
+        from_seq: i64,
+        to_seq: i64,
+        cap: usize,
+    ) -> Result<Vec<(i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT global_seq FROM messages
+             WHERE global_seq >= ?1 AND global_seq <= ?2
+             ORDER BY global_seq",
+        )?;
+
+        let seqs: Vec<i64> = stmt
+            .query_map(params![from_seq, to_seq], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if seqs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut segments: Vec<(i64, i64)> = Vec::new();
+        let mut seg_start = seqs[0];
+        let mut seg_end = seqs[0];
+
+        for &seq in &seqs[1..] {
+            if seq == seg_end + 1 {
+                seg_end = seq;
+            } else {
+                segments.push((seg_start, seg_end));
+                if segments.len() >= cap {
+                    // Over-claim: extend last segment to the local max in range
+                    let last = segments.last_mut().unwrap();
+                    last.1 = *seqs.last().unwrap();
+                    return Ok(segments);
+                }
+                seg_start = seq;
+                seg_end = seq;
+            }
+        }
+        segments.push((seg_start, seg_end));
+        Ok(segments)
     }
 
     /// Fetch all thread replies for a set of top-level message UUIDs.
@@ -347,6 +384,58 @@ mod tests {
         store.store_peer_key(user, &key1).unwrap();
         store.store_peer_key(user, &key2).unwrap();
         assert_eq!(store.get_peer_key(user).unwrap(), Some(key2));
+    }
+
+    #[test]
+    fn test_get_segments_contiguous() {
+        let store = open_mem_store();
+        for i in 1..=5 {
+            store.insert_message(&make_msg(i)).unwrap();
+        }
+        let segs = store.get_segments_in_range(1, 5, 10).unwrap();
+        assert_eq!(segs, vec![(1, 5)]);
+    }
+
+    #[test]
+    fn test_get_segments_with_gaps() {
+        let store = open_mem_store();
+        for i in [1i64, 2, 4, 5, 8] {
+            store.insert_message(&make_msg(i)).unwrap();
+        }
+        let segs = store.get_segments_in_range(1, 10, 10).unwrap();
+        assert_eq!(segs, vec![(1, 2), (4, 5), (8, 8)]);
+    }
+
+    #[test]
+    fn test_get_segments_scoped_to_range() {
+        let store = open_mem_store();
+        for i in 1..=10 {
+            store.insert_message(&make_msg(i)).unwrap();
+        }
+        let segs = store.get_segments_in_range(3, 7, 10).unwrap();
+        assert_eq!(segs, vec![(3, 7)]);
+    }
+
+    #[test]
+    fn test_get_segments_empty() {
+        let store = open_mem_store();
+        let segs = store.get_segments_in_range(1, 10, 10).unwrap();
+        assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn test_get_segments_cap_extends_last() {
+        let store = open_mem_store();
+        // Seqs: 1, 3, 5, 7, 9 — each is its own segment (gap of 1 between each)
+        for i in [1i64, 3, 5, 7, 9] {
+            store.insert_message(&make_msg(i)).unwrap();
+        }
+        // Cap at 2 — should return [(1,1), (3,9)] where last extends to max
+        let segs = store.get_segments_in_range(1, 10, 2).unwrap();
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0], (1, 1));
+        // Last segment's end extended to 9 (the max seq in range)
+        assert_eq!(segs[1].1, 9);
     }
 
     fn make_thread_reply(seq: i64, thread_uuid: &str) -> Value {

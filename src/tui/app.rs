@@ -287,6 +287,8 @@ pub struct AppState {
     pub scrollback_pending: bool,
     /// Rate-limit: last time a scrollback sync was requested
     pub last_scrollback_request: Option<Instant>,
+    /// Whether the progressive catch-up loop is still running (cleared by "current"/"no_peers")
+    pub catch_up_pending: bool,
     /// Active `@mention` autocomplete popup, if any.
     pub mention_popup: Option<MentionState>,
     /// Pending mentions committed to input buffers, consumed on send.
@@ -335,6 +337,7 @@ impl AppState {
             pending_list_invites: false,
             scrollback_pending: false,
             last_scrollback_request: None,
+            catch_up_pending: false,
             last_typing_notify: None,
             last_typing_target: None,
             typing_indicators: HashSet::new(),
@@ -1345,6 +1348,7 @@ impl AppState {
         self.members.clear();
         self.scrollback_pending = false;
         self.last_scrollback_request = None;
+        self.catch_up_pending = false;
         for pane in &mut self.panes {
             pane.clear_view_state();
         }
@@ -1412,6 +1416,7 @@ impl AppState {
         if let Some(ref ch) = self.chat_channel {
             let sync = ch.sync_catchup_frame();
             let _ = self.ws_tx.send(sync.encode());
+            self.catch_up_pending = true;
         }
     }
 
@@ -1422,6 +1427,10 @@ impl AppState {
             "presence_state" => self.handle_presence(&frame.payload),
             "presence_diff" => self.handle_presence_diff(&frame.payload),
             "sync:push" => {
+                let msg_count = frame.payload["messages"]
+                    .as_array()
+                    .map(|a| a.len())
+                    .unwrap_or(0);
                 if let Some(msgs) = frame.payload["messages"].as_array() {
                     let msgs: Vec<_> = msgs.clone();
                     for msg in msgs {
@@ -1430,6 +1439,14 @@ impl AppState {
                     }
                 }
                 self.scrollback_pending = false;
+                // If we received a full batch, we may still be behind — re-issue catchup.
+                // The server's 2s rate limit acts as natural throttle.
+                if self.catch_up_pending && msg_count >= 100 {
+                    if let Some(ref ch) = self.chat_channel {
+                        let sync = ch.sync_catchup_frame();
+                        let _ = self.ws_tx.send(sync.encode());
+                    }
+                }
             }
             "member:removed" => {
                 let removed_uuid = frame.payload["user_uuid"]
@@ -1471,6 +1488,13 @@ impl AppState {
                     self.has_keys = ch.crypto.is_some();
                     if !had_keys && self.has_keys {
                         self.redecrypt_stored_messages();
+                    }
+                }
+                // For sync:catchup replies: stop the progressive loop when caught up.
+                if frame.event == "phx_reply" {
+                    let sync_status = frame.payload["response"]["status"].as_str().unwrap_or("");
+                    if sync_status == "current" || sync_status == "no_peers" {
+                        self.catch_up_pending = false;
                     }
                 }
                 // For sync:assign, build sync responses

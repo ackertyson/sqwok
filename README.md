@@ -95,6 +95,10 @@ This means your local chat database is the authoritative record of your conversa
 
 Encryption keys are the one exception: when a group's keys rotate while someone is offline, the server holds onto the new keys (not the messages) for up to 30 days so that person can still decrypt everything once they reconnect.
 
+## Security Model
+
+sqwok is **secure but not anonymous**. The server cannot read message content — that's guaranteed by the encryption. What it can see is metadata: who is in a group, who sent each message, and when. If your threat model is "I don't want the server operator reading our conversations," sqwok delivers on that. If your threat model is "I don't want anyone to know we're talking," it doesn't.
+
 ## Chat Navigation
 
 | Key | Action |
