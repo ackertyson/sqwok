@@ -180,7 +180,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut seed = [0u8; 32];
         OsRng.fill_bytes(&mut seed);
-        std::fs::write(dir.join("e2e_private.key"), &seed).unwrap();
+        std::fs::write(dir.join("e2e_private.key"), seed).unwrap();
         (E2eIdentity::load(&dir).unwrap(), dir)
     }
 

@@ -289,6 +289,13 @@ pub struct AppState {
     pub last_scrollback_request: Option<Instant>,
     /// Whether the progressive catch-up loop is still running (cleared by "current"/"no_peers")
     pub catch_up_pending: bool,
+    /// When set, retry sync:catchup after this instant (used for rate-limit backoff).
+    pub retry_catchup_after: Option<Instant>,
+    /// Number of consecutive rate-limited retries so far (for exponential backoff).
+    pub catchup_retry_count: u32,
+    /// When we last sent a sync:catchup frame — used to avoid sending into the server's rate-limit
+    /// window and instead schedule a targeted retry at the exact expiry time.
+    pub last_catchup_sent_at: Option<Instant>,
     /// Active `@mention` autocomplete popup, if any.
     pub mention_popup: Option<MentionState>,
     /// Pending mentions committed to input buffers, consumed on send.
@@ -338,6 +345,9 @@ impl AppState {
             scrollback_pending: false,
             last_scrollback_request: None,
             catch_up_pending: false,
+            retry_catchup_after: None,
+            catchup_retry_count: 0,
+            last_catchup_sent_at: None,
             last_typing_notify: None,
             last_typing_target: None,
             typing_indicators: HashSet::new(),
@@ -1349,6 +1359,9 @@ impl AppState {
         self.scrollback_pending = false;
         self.last_scrollback_request = None;
         self.catch_up_pending = false;
+        self.retry_catchup_after = None;
+        self.catchup_retry_count = 0;
+        self.last_catchup_sent_at = None;
         for pane in &mut self.panes {
             pane.clear_view_state();
         }
@@ -1417,6 +1430,7 @@ impl AppState {
             let sync = ch.sync_catchup_frame();
             let _ = self.ws_tx.send(sync.encode());
             self.catch_up_pending = true;
+            self.last_catchup_sent_at = Some(Instant::now());
         }
     }
 
@@ -1490,11 +1504,35 @@ impl AppState {
                         self.redecrypt_stored_messages();
                     }
                 }
-                // For sync:catchup replies: stop the progressive loop when caught up.
+                // For sync:catchup replies: stop the progressive loop when caught up,
+                // or schedule a retry if the server rate-limited us.
                 if frame.event == "phx_reply" {
-                    let sync_status = frame.payload["response"]["status"].as_str().unwrap_or("");
-                    if sync_status == "current" || sync_status == "no_peers" {
-                        self.catch_up_pending = false;
+                    let is_error = frame.payload["status"].as_str() == Some("error");
+                    let reason = frame.payload["response"]["reason"].as_str().unwrap_or("");
+                    if is_error && reason == "sync_rate_limited" && self.catch_up_pending {
+                        const MAX_RETRIES: u32 = 5;
+                        if self.catchup_retry_count < MAX_RETRIES {
+                            // Exponential backoff starting just past the server's 2s window.
+                            let delay_ms = 2100u64 * (1 << self.catchup_retry_count);
+                            self.catchup_retry_count += 1;
+                            self.retry_catchup_after = Some(
+                                Instant::now()
+                                    + std::time::Duration::from_millis(delay_ms),
+                            );
+                        } else {
+                            // Give up after MAX_RETRIES; the next organic event will retry.
+                            self.catch_up_pending = false;
+                            self.retry_catchup_after = None;
+                            self.catchup_retry_count = 0;
+                        }
+                    } else {
+                        let sync_status =
+                            frame.payload["response"]["status"].as_str().unwrap_or("");
+                        if sync_status == "current" || sync_status == "no_peers" {
+                            self.catch_up_pending = false;
+                            self.retry_catchup_after = None;
+                            self.catchup_retry_count = 0;
+                        }
                     }
                 }
                 // For sync:assign, build sync responses
@@ -1513,6 +1551,34 @@ impl AppState {
                             }
                         }
                     }
+                }
+            }
+            "sync:peer_available" => {
+                // A peer just came online who may hold messages we're missing.
+                // Re-issue catchup so we can pick up any gaps they can now fill.
+                // If we're still inside the server's 2s rate-limit window, schedule a
+                // proactive retry at the exact expiry rather than sending now and burning
+                // a round-trip on a guaranteed rate-limited reply.
+                self.catch_up_pending = true;
+                self.catchup_retry_count = 0;
+
+                let in_window = self
+                    .last_catchup_sent_at
+                    .map(|t| t.elapsed() < std::time::Duration::from_millis(2000))
+                    .unwrap_or(false);
+
+                if in_window {
+                    let retry_at = self.last_catchup_sent_at.unwrap()
+                        + std::time::Duration::from_millis(2050);
+                    // Only move the scheduled retry earlier, never push it out.
+                    match self.retry_catchup_after {
+                        Some(existing) if existing <= retry_at => {}
+                        _ => self.retry_catchup_after = Some(retry_at),
+                    }
+                } else if let Some(ref ch) = self.chat_channel {
+                    let sync = ch.sync_catchup_frame();
+                    let _ = self.ws_tx.send(sync.encode());
+                    self.last_catchup_sent_at = Some(Instant::now());
                 }
             }
             "typing:active" => {
@@ -1766,6 +1832,20 @@ impl AppState {
             if updated.elapsed().as_secs() >= 7 {
                 self.typing_indicators.clear();
                 self.typing_indicators_updated = None;
+            }
+        }
+        if let Some(retry_at) = self.retry_catchup_after {
+            if Instant::now() >= retry_at {
+                self.retry_catchup_after = None;
+                if let Some(ref ch) = self.chat_channel {
+                    let sync = ch.sync_catchup_frame();
+                    let _ = self.ws_tx.send(sync.encode());
+                    self.last_catchup_sent_at = Some(Instant::now());
+                    // catchup_retry_count is NOT reset here: the server's reply
+                    // will either clear it (success) or increment it (still limited).
+                } else {
+                    self.catchup_retry_count = 0;
+                }
             }
         }
     }

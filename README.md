@@ -99,6 +99,8 @@ Encryption keys are the one exception: when a group's keys rotate while someone 
 
 sqwok is **secure but not anonymous**. The server cannot read message content — that's guaranteed by the encryption. What it can see is metadata: who is in a group, who sent each message, and when. If your threat model is "I don't want the server operator reading our conversations," sqwok delivers on that. If your threat model is "I don't want anyone to know we're talking," it doesn't.
 
+Also, Claude wrote this with my inexpert guidance, so it might not even work. Any crypto nerds want to take a shot at it?
+
 ## Chat Navigation
 
 | Key | Action |

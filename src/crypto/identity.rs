@@ -80,7 +80,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut seed = [0u8; 32];
         OsRng.fill_bytes(&mut seed);
-        std::fs::write(dir.join("e2e_private.key"), &seed).unwrap();
+        std::fs::write(dir.join("e2e_private.key"), seed).unwrap();
         let identity = E2eIdentity::load(&dir).unwrap();
         (identity, dir)
     }
@@ -104,7 +104,7 @@ mod tests {
     fn test_load_wrong_size_fails() {
         let dir = std::env::temp_dir().join(format!("sqwok_id_bad_{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("e2e_private.key"), &[0u8; 16]).unwrap();
+        std::fs::write(dir.join("e2e_private.key"), [0u8; 16]).unwrap();
         assert!(E2eIdentity::load(&dir).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
