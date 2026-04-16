@@ -17,12 +17,21 @@ pub fn build_sync_responses(
 
     let mut frames = Vec::new();
     for chunk in messages.chunks(MAX_CHUNK_SIZE) {
+        // Strip local-only fields before transmitting to a peer.
+        let stripped: Vec<_> = chunk
+            .iter()
+            .map(|m| {
+                let mut m = m.clone();
+                m.as_object_mut().map(|o| o.remove("read"));
+                m
+            })
+            .collect();
         let frame = Frame::new(
             topic,
             "sync:push",
             serde_json::json!({
                 "recipient": requester,
-                "messages": chunk,
+                "messages": stripped,
             }),
         );
         frames.push(frame);

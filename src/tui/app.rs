@@ -1441,6 +1441,8 @@ impl AppState {
             "presence_state" => self.handle_presence(&frame.payload),
             "presence_diff" => self.handle_presence_diff(&frame.payload),
             "sync:push" => {
+                // Sync batches cap at this size; receiving a full batch means there may be more.
+                const SYNC_BATCH_SIZE: usize = 100;
                 let msg_count = frame.payload["messages"]
                     .as_array()
                     .map(|a| a.len())
@@ -1448,14 +1450,13 @@ impl AppState {
                 if let Some(msgs) = frame.payload["messages"].as_array() {
                     let msgs: Vec<_> = msgs.clone();
                     for msg in msgs {
-                        let pseudo_frame = Frame::new(&frame.topic, "msg:new", msg);
-                        self.handle_msg_new(&pseudo_frame.payload);
+                        self.handle_msg_new(&msg);
                     }
                 }
                 self.scrollback_pending = false;
                 // If we received a full batch, we may still be behind — re-issue catchup.
                 // The server's 2s rate limit acts as natural throttle.
-                if self.catch_up_pending && msg_count >= 100 {
+                if self.catch_up_pending && msg_count >= SYNC_BATCH_SIZE {
                     if let Some(ref ch) = self.chat_channel {
                         let sync = ch.sync_catchup_frame();
                         let _ = self.ws_tx.send(sync.encode());
@@ -1515,10 +1516,8 @@ impl AppState {
                             // Exponential backoff starting just past the server's 2s window.
                             let delay_ms = 2100u64 * (1 << self.catchup_retry_count);
                             self.catchup_retry_count += 1;
-                            self.retry_catchup_after = Some(
-                                Instant::now()
-                                    + std::time::Duration::from_millis(delay_ms),
-                            );
+                            self.retry_catchup_after =
+                                Some(Instant::now() + std::time::Duration::from_millis(delay_ms));
                         } else {
                             // Give up after MAX_RETRIES; the next organic event will retry.
                             self.catch_up_pending = false;
@@ -1568,8 +1567,8 @@ impl AppState {
                     .unwrap_or(false);
 
                 if in_window {
-                    let retry_at = self.last_catchup_sent_at.unwrap()
-                        + std::time::Duration::from_millis(2050);
+                    let retry_at =
+                        self.last_catchup_sent_at.unwrap() + std::time::Duration::from_millis(2050);
                     // Only move the scheduled retry earlier, never push it out.
                     match self.retry_catchup_after {
                         Some(existing) if existing <= retry_at => {}

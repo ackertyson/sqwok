@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_join_frame_has_join_ref() {
-        let frame = Frame::join("chat:abc", serde_json::json!({"high_water": 0}));
+        let frame = Frame::join("chat:abc", serde_json::json!({}));
         assert!(frame.join_ref.is_some());
         assert_eq!(frame.join_ref, frame.ref_id);
         assert_eq!(frame.event, "phx_join");

@@ -34,6 +34,8 @@ docker compose run --rm sqwok join MY_INVITE_CODE
 docker compose run --rm sqwok
 ```
 
+Note that container file paths reported by the app may not map literally to your host paths.
+
 ### From source
 
 Install [Rust](https://rust-lang.org/tools/install/), then...
@@ -48,9 +50,8 @@ On first launch the client walks you through registration:
 
 1. Enter your email and screenname
 2. Check your email and click the verification link
-3. The client polls until verified
-4. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.) and enter the 6-digit TOTP code _(you will need this same authenticator app registration if you ever need to recover your account later!)_
-5. The client generates a keypair and gets a cert signed by the server's CA
+3. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.) and enter the 6-digit TOTP code _(you will need this same authenticator app registration if you ever need to recover your account later!)_
+4. The client generates a keypair and gets a cert signed by the server's CA
 
 Credentials are stored in `~/.sqwok/identity/`
 

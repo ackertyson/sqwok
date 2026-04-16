@@ -58,16 +58,10 @@ impl ChatChannel {
         // Report actual segment coverage so the server knows exactly what we hold.
         // Full range [1, i64::MAX] gives a complete picture; cap at 10 pairs to keep
         // the frame small. An empty list signals a fresh client with no history.
-        let segments = self
-            .store
-            .get_segments_in_range(1, i64::MAX, 10)
-            .unwrap_or_default();
-        let segments_json: Vec<[i64; 2]> = segments.iter().map(|&(s, e)| [s, e]).collect();
-
         let frame = Frame::join(
             &self.topic(),
             serde_json::json!({
-                "segments": segments_json
+                "segments": self.segments_json(1, i64::MAX)
             }),
         );
         self.join_ref = frame.join_ref.clone();
@@ -143,17 +137,21 @@ impl ChatChannel {
     }
 
     pub fn sync_catchup_frame(&self) -> Frame {
-        let segments = self
-            .store
-            .get_segments_in_range(1, i64::MAX, 10)
-            .unwrap_or_default();
-        let segments_json: Vec<[i64; 2]> = segments.iter().map(|&(s, e)| [s, e]).collect();
         self.frame(
             "sync:catchup",
             serde_json::json!({
-                "segments": segments_json
+                "segments": self.segments_json(1, i64::MAX)
             }),
         )
+    }
+
+    fn segments_json(&self, from: i64, to: i64) -> Vec<[i64; 2]> {
+        self.store
+            .get_segments_in_range(from, to, 10)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(s, e)| [s, e])
+            .collect()
     }
 
     pub fn sync_scrollback_frame(&self, before_seq: i64, limit: i64) -> Frame {
@@ -169,18 +167,6 @@ impl ChatChannel {
     /// Returns Some(frame) when a response should be sent back (e.g. for key:request, sync:query).
     pub fn handle_incoming(&mut self, frame: &Frame) -> Result<Option<Frame>> {
         match frame.event.as_str() {
-            "msg:new" => {
-                self.handle_msg_new(&frame.payload)?;
-                Ok(None)
-            }
-            "member_list" => {
-                self.handle_member_list(&frame.payload)?;
-                Ok(None)
-            }
-            "sync:push" => {
-                self.handle_sync_push(&frame.payload)?;
-                Ok(None)
-            }
             "sync:query" => self.handle_sync_query(&frame.payload),
             "key:distribute" => {
                 self.handle_key_distribute(&frame.payload)?;
@@ -191,53 +177,8 @@ impl ChatChannel {
                 self.handle_reply(&frame.payload)?;
                 Ok(None)
             }
-            "phx_error" => {
-                eprintln!("Channel error: {:?}", frame.payload);
-                Ok(None)
-            }
             _ => Ok(None),
         }
-    }
-
-    fn handle_msg_new(&mut self, payload: &Value) -> Result<()> {
-        let global_seq = payload["global_seq"].as_i64().unwrap_or(0);
-
-        self.store.insert_message(payload)?;
-
-        if global_seq > self.high_water {
-            self.high_water = global_seq;
-        }
-
-        let ciphertext = payload["ciphertext"].as_str().unwrap_or("");
-        let sender_str = payload["sender_uuid"].as_str().unwrap_or("unknown");
-        let short_sender = &sender_str[..sender_str.len().min(8)];
-
-        if let Some(crypto) = &self.crypto {
-            if let Ok(sender_uuid) = Uuid::parse_str(sender_str) {
-                match crypto.decrypt(&sender_uuid, ciphertext) {
-                    Ok(text) => println!("[{}] {}", short_sender, text),
-                    Err(e) => eprintln!("[{}] <decrypt failed: {}>", short_sender, e),
-                }
-            }
-        } else {
-            println!("[{}] <encrypted — awaiting keys>", short_sender);
-        }
-
-        Ok(())
-    }
-
-    fn handle_member_list(&self, payload: &Value) -> Result<()> {
-        if let Some(members) = payload["members"].as_array() {
-            println!("Members:");
-            for m in members {
-                println!(
-                    "  {} ({})",
-                    m["screenname"].as_str().unwrap_or("?"),
-                    m["role"].as_str().unwrap_or("member")
-                );
-            }
-        }
-        Ok(())
     }
 
     fn handle_sync_query(&self, payload: &Value) -> Result<Option<Frame>> {
@@ -247,32 +188,13 @@ impl ChatChannel {
 
         // Report actual segments within the requested range so the server can
         // assign only ranges we genuinely hold.
-        let segments = self
-            .store
-            .get_segments_in_range(from_seq, to_seq, 10)
-            .unwrap_or_default();
-        let segments_json: Vec<[i64; 2]> = segments.iter().map(|&(s, e)| [s, e]).collect();
-
         Ok(Some(self.frame(
             "sync:offer",
             serde_json::json!({
                 "requester": requester,
-                "segments": segments_json
+                "segments": self.segments_json(from_seq, to_seq)
             }),
         )))
-    }
-
-    fn handle_sync_push(&mut self, payload: &Value) -> Result<()> {
-        if let Some(messages) = payload["messages"].as_array() {
-            for msg in messages {
-                self.store.insert_message(msg)?;
-                let seq = msg["global_seq"].as_i64().unwrap_or(0);
-                if seq > self.high_water {
-                    self.high_water = seq;
-                }
-            }
-        }
-        Ok(())
     }
 
     fn handle_key_distribute(&mut self, payload: &Value) -> Result<()> {
