@@ -16,19 +16,19 @@ impl E2eIdentity {
     /// Load from the identity dir. Requires both `e2e_private.key` (Ed25519, 32 bytes)
     /// and `x25519_private.key` (X25519, 32 bytes).
     pub fn load(identity_dir: &Path) -> Result<Self> {
-        let ed25519_bytes = std::fs::read(identity_dir.join("e2e_private.key"))?;
+        let ed25519_bytes = Zeroizing::new(std::fs::read(identity_dir.join("e2e_private.key"))?);
         if ed25519_bytes.len() != 32 {
             anyhow::bail!("e2e_private.key must be exactly 32 bytes");
         }
-        let mut seed: [u8; 32] = ed25519_bytes.try_into().unwrap();
+        let mut seed: [u8; 32] = ed25519_bytes.as_slice().try_into().unwrap();
         let signing_key = SigningKey::from_bytes(&seed);
         seed.zeroize();
 
-        let x25519_bytes = std::fs::read(identity_dir.join("x25519_private.key"))?;
+        let x25519_bytes = Zeroizing::new(std::fs::read(identity_dir.join("x25519_private.key"))?);
         if x25519_bytes.len() != 32 {
             anyhow::bail!("x25519_private.key must be exactly 32 bytes");
         }
-        let mut x25519_seed: [u8; 32] = x25519_bytes.try_into().unwrap();
+        let mut x25519_seed: [u8; 32] = x25519_bytes.as_slice().try_into().unwrap();
         let x25519_secret = StaticSecret::from(x25519_seed);
         x25519_seed.zeroize();
 

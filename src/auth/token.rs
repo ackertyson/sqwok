@@ -2,16 +2,18 @@ use anyhow::Result;
 use base64::Engine;
 use chrono::Utc;
 use std::path::Path;
+use zeroize::Zeroizing;
 
 pub fn build_token(identity_dir: &Path, server_host: &str) -> Result<String> {
     let timestamp = Utc::now().to_rfc3339();
     let message = format!("{}|{}", timestamp, server_host);
 
-    let key_pem = std::fs::read_to_string(identity_dir.join("private_key.pem"))?;
+    let key_pem = Zeroizing::new(std::fs::read_to_string(
+        identity_dir.join("private_key.pem"),
+    )?);
     let key_pem_parsed = pem::parse(key_pem.as_bytes())?;
-    let key_der = key_pem_parsed.contents().to_vec();
 
-    let key_pair = ring::signature::RsaKeyPair::from_pkcs8(&key_der)
+    let key_pair = ring::signature::RsaKeyPair::from_pkcs8(key_pem_parsed.contents())
         .map_err(|e| anyhow::anyhow!("Failed to load RSA key: {:?}", e))?;
 
     let mut signature = vec![0u8; key_pair.public().modulus_len()];

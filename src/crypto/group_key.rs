@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rand::{rngs::OsRng, RngCore};
 use std::path::Path;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// A single epoch key — 256-bit AES key.
 #[derive(Clone, Zeroize)]
@@ -78,12 +78,12 @@ impl KeyChain {
     /// Persist key chain to disk. Format: [epoch: u32 LE][key: 32 bytes] repeated.
     pub fn save(&self, chat_dir: &Path) -> Result<()> {
         let path = chat_dir.join("keychain.bin");
-        let mut data = Vec::with_capacity(self.keys.len() * 36);
+        let mut data = Zeroizing::new(Vec::with_capacity(self.keys.len() * 36));
         for ek in &self.keys {
             data.extend_from_slice(&ek.epoch.to_le_bytes());
             data.extend_from_slice(&ek.key);
         }
-        std::fs::write(&path, &data)?;
+        std::fs::write(&path, data.as_slice())?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -97,7 +97,7 @@ impl KeyChain {
         if !path.exists() {
             return Ok(None);
         }
-        let data = std::fs::read(&path)?;
+        let data = Zeroizing::new(std::fs::read(&path)?);
         if data.len() % 36 != 0 {
             anyhow::bail!(
                 "keychain.bin corrupted: length {} not a multiple of 36",

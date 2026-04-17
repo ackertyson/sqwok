@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use base64::Engine;
 use std::path::Path;
+use zeroize::Zeroizing;
 
 pub async fn run_registration(server_url: &str, identity_dir: &Path) -> Result<()> {
     let client = reqwest::Client::new();
@@ -172,13 +173,13 @@ async fn poll_for_verification(
     bail!("Verification timed out after 15 minutes.")
 }
 
-fn extract_totp_secret(totp_uri: &str) -> Option<String> {
+fn extract_totp_secret(totp_uri: &str) -> Option<Zeroizing<String>> {
     totp_uri
         .split('?')
         .nth(1)?
         .split('&')
         .find(|p| p.starts_with("secret="))
-        .map(|p| p["secret=".len()..].to_string())
+        .map(|p| Zeroizing::new(p["secret=".len()..].to_string()))
 }
 
 fn qr_svg_path() -> Option<std::path::PathBuf> {
@@ -218,8 +219,8 @@ fn display_totp_prompt(totp_uri: &str) {
     }
 
     let svg_url = write_qr_svg(totp_uri);
-    let secret =
-        extract_totp_secret(totp_uri).unwrap_or_else(|| "(could not extract secret)".to_string());
+    let secret = extract_totp_secret(totp_uri)
+        .unwrap_or_else(|| Zeroizing::new("(could not extract secret)".to_string()));
 
     const YELLOW: &str = "\x1b[33m";
     const DIM: &str = "\x1b[2m";
@@ -237,7 +238,7 @@ fn display_totp_prompt(totp_uri: &str) {
         println!("│  {DIM}{:<59}{R}│", url);
     }
     println!("│                                                             │");
-    println!("│  Manual entry key: {:<41}│", secret);
+    println!("│  Manual entry key: {:<41}│", secret.as_str());
     println!("└─────────────────────────────────────────────────────────────┘");
 }
 
@@ -385,7 +386,7 @@ mod tests {
     fn test_extract_totp_secret() {
         let uri = "otpauth://totp/sqwok:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=sqwok";
         assert_eq!(
-            extract_totp_secret(uri).as_deref(),
+            extract_totp_secret(uri).as_ref().map(|s| s.as_str()),
             Some("JBSWY3DPEHPK3PXP")
         );
     }
@@ -393,7 +394,10 @@ mod tests {
     #[test]
     fn test_extract_totp_secret_among_multiple_params() {
         let uri = "otpauth://totp/sqwok:alice?algorithm=SHA1&digits=6&secret=ABCDEF&period=30";
-        assert_eq!(extract_totp_secret(uri).as_deref(), Some("ABCDEF"));
+        assert_eq!(
+            extract_totp_secret(uri).as_ref().map(|s| s.as_str()),
+            Some("ABCDEF")
+        );
     }
 
     #[test]
