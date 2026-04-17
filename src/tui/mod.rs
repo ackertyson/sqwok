@@ -75,7 +75,7 @@ pub async fn run(
                 maybe_spawn_invite_create(app, &event_tx, &http);
                 maybe_spawn_redeem(app, &event_tx, &http);
                 maybe_spawn_leave_chat(app, &event_tx, &http);
-                maybe_spawn_search(app, &event_tx, &http);
+                maybe_spawn_search(app);
                 maybe_spawn_add_member(app, &event_tx, &http);
                 maybe_spawn_list_invites(app, &event_tx, &http);
                 maybe_spawn_revoke_invite(app, &event_tx, &http);
@@ -162,21 +162,6 @@ pub async fn run(
                     std::time::Instant::now() + std::time::Duration::from_secs(4),
                 ));
             }
-            Some(AppEvent::SearchResults { query, results }) => {
-                if let Some(ModalState::Search(ref mut search)) = app.modal {
-                    if search.query == query {
-                        // Merge with existing results, deduplicating by UUID
-                        let existing_uuids: std::collections::HashSet<Uuid> =
-                            search.results.iter().map(|r| r.uuid).collect();
-                        for r in results {
-                            if !existing_uuids.contains(&r.uuid) {
-                                search.results.push(r);
-                            }
-                        }
-                        search.last_searched = query;
-                    }
-                }
-            }
             Some(AppEvent::RedeemOk { chat_uuid, topic }) => {
                 // Add to chat list if not already present, then auto-join
                 if !app.chat_list.iter().any(|c| c.uuid == chat_uuid) {
@@ -223,11 +208,11 @@ pub async fn run(
             Some(AppEvent::AddMemberOk {
                 screenname,
                 user_uuid,
-                e2e_public_key,
+                e2e_keys,
             }) => {
                 // Distribute keys to the newly added member
-                if let Some(ref e2e_bytes) = e2e_public_key {
-                    distribute_keys_to_member(app, &user_uuid, e2e_bytes);
+                if let Some((ref ed25519_bytes, ref x25519_bytes)) = e2e_keys {
+                    distribute_keys_to_member(app, &user_uuid, ed25519_bytes, x25519_bytes);
                 }
                 app.toast = Some((
                     format!("Added {} to chat", screenname),
@@ -421,13 +406,8 @@ fn maybe_spawn_leave_chat(
     });
 }
 
-// Spawn a server search when the search modal query has changed.
-fn maybe_spawn_search(
-    app: &mut AppState,
-    event_tx: &mpsc::UnboundedSender<AppEvent>,
-    http: &reqwest::Client,
-) {
-    // Extract query — releases borrow so we can access other fields below.
+// Run a local contact-cache search when the search modal query has changed.
+fn maybe_spawn_search(app: &mut AppState) {
     let query = match &app.modal {
         Some(ModalState::Search(s)) if !s.query.is_empty() && s.query != s.last_searched => {
             s.query.clone()
@@ -435,11 +415,11 @@ fn maybe_spawn_search(
         _ => return,
     };
 
-    // Mark as searched and do a synchronous local search.
     if let Some(ModalState::Search(ref mut search)) = app.modal {
         search.last_searched = query.clone();
     }
-    let local_results = app
+
+    let results = app
         .contact_store
         .as_ref()
         .and_then(|cs| cs.search(&query, 10).ok())
@@ -451,28 +431,12 @@ fn maybe_spawn_search(
                 })
                 .collect::<Vec<_>>()
         });
+
     if let Some(ModalState::Search(ref mut search)) = app.modal {
-        if let Some(results) = local_results {
+        if let Some(results) = results {
             search.results = results;
         }
     }
-
-    let server_url = app.server_url.clone();
-    let identity_dir = app.identity_dir.clone();
-    let http = http.clone();
-    let tx = event_tx.clone();
-
-    tokio::spawn(async move {
-        let token = match crate::auth::token::build_token(&identity_dir, &server_url) {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-        if let Ok(results) =
-            crate::net::search::search_users(&http, &server_url, &token, &query).await
-        {
-            let _ = tx.send(AppEvent::SearchResults { query, results });
-        }
-    });
 }
 
 // Spawn the add-member HTTP task when pending_add_member is set.
@@ -508,12 +472,12 @@ fn maybe_spawn_add_member(
             .await
         {
             Ok(resp) if resp.status().is_success() => {
-                // Fetch the new member's e2e public key so we can distribute keys
-                let e2e_key = fetch_e2e_key(&http, &server_url, &token, &user_uuid).await;
+                // Fetch the new member's keys so we can distribute the group key to them
+                let e2e_keys = fetch_peer_keys(&http, &server_url, &token, &user_uuid).await;
                 let _ = tx.send(AppEvent::AddMemberOk {
                     screenname: user_uuid.clone(),
                     user_uuid,
-                    e2e_public_key: e2e_key,
+                    e2e_keys,
                 });
             }
             Ok(resp) => {
@@ -608,13 +572,14 @@ fn maybe_spawn_revoke_invite(
     });
 }
 
-/// Fetch a user's e2e public key from the server. Returns raw key bytes or None.
-async fn fetch_e2e_key(
+/// Fetch a user's Ed25519 and X25519 public keys from the server.
+/// Returns `(ed25519_bytes, x25519_bytes)` or None if unavailable.
+async fn fetch_peer_keys(
     http: &reqwest::Client,
     server_url: &str,
     token: &str,
     user_uuid: &str,
-) -> Option<Vec<u8>> {
+) -> Option<(Vec<u8>, Vec<u8>)> {
     let url = format!("{}/api/users/{}/e2e_key", server_url, user_uuid);
     let resp: serde_json::Value = http
         .get(&url)
@@ -625,12 +590,26 @@ async fn fetch_e2e_key(
         .json()
         .await
         .ok()?;
-    let key_b64 = resp["e2e_public_key"].as_str()?;
-    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key_b64).ok()
+    let ed25519_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        resp["e2e_public_key"].as_str()?,
+    )
+    .ok()?;
+    let x25519_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        resp["x25519_public_key"].as_str()?,
+    )
+    .ok()?;
+    Some((ed25519_bytes, x25519_bytes))
 }
 
 /// Distribute current epoch keys to a newly added member.
-fn distribute_keys_to_member(app: &mut AppState, user_uuid: &str, e2e_public_bytes: &[u8]) {
+fn distribute_keys_to_member(
+    app: &mut AppState,
+    user_uuid: &str,
+    ed25519_bytes: &[u8],
+    x25519_bytes: &[u8],
+) {
     let chat = match &app.chat_channel {
         Some(c) => c,
         None => return,
@@ -640,22 +619,16 @@ fn distribute_keys_to_member(app: &mut AppState, user_uuid: &str, e2e_public_byt
         None => return,
     };
 
-    // Parse the member's Ed25519 key and convert to X25519
-    let arr: [u8; 32] = match e2e_public_bytes.try_into() {
+    let x_arr: [u8; 32] = match x25519_bytes.try_into() {
         Ok(a) => a,
         Err(_) => return,
     };
-    let peer_ed25519 = match ed25519_dalek::VerifyingKey::from_bytes(&arr) {
-        Ok(k) => k,
-        Err(_) => return,
-    };
-    let peer_x25519 = match crate::crypto::identity::ed25519_to_x25519_public(&peer_ed25519) {
-        Some(k) => k,
-        None => return,
-    };
+    let peer_x25519 = x25519_dalek::PublicKey::from(x_arr);
 
-    // Store the peer key for future use
-    let _ = chat.store.store_peer_key(user_uuid, e2e_public_bytes);
+    // Cache both keys for future use
+    let _ = chat
+        .store
+        .store_peer_keys(user_uuid, ed25519_bytes, x25519_bytes);
 
     // Prepare and send key bundle (all epochs for new member)
     if let Ok(bundle) = crypto.prepare_key_bundle(&peer_x25519, true) {

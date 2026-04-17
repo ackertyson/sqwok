@@ -60,6 +60,7 @@ impl ContactStore {
             .join("contacts.db");
         std::fs::create_dir_all(path.parent().unwrap())?;
         let conn = Connection::open(&path)?;
+        crate::storage::restrict_file_permissions(&path)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS contacts (
                 uuid TEXT PRIMARY KEY,

@@ -6,6 +6,7 @@ use hkdf::Hkdf;
 use rand::{rngs::OsRng, RngCore};
 use sha2::Sha256;
 use x25519_dalek::PublicKey as X25519PublicKey;
+use zeroize::Zeroizing;
 
 use crate::crypto::group_key::EpochKey;
 use crate::crypto::identity::E2eIdentity;
@@ -40,10 +41,10 @@ fn derive_wrapping_key(
         salt[32..].copy_from_slice(a);
     }
     let hk = Hkdf::<Sha256>::new(Some(&salt), shared_secret);
-    let mut okm = [0u8; 32];
-    hk.expand(info, &mut okm)
+    let mut okm = Zeroizing::new([0u8; 32]);
+    hk.expand(info, okm.as_mut())
         .expect("32 bytes is a valid length for HKDF-SHA256");
-    Key::<Aes256Gcm>::from(okm)
+    Key::<Aes256Gcm>::from(*okm)
 }
 
 /// Encrypt epoch keys for a specific recipient.
@@ -178,9 +179,12 @@ mod tests {
     fn make_test_identity() -> (E2eIdentity, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("sqwok_kx_{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut seed = [0u8; 32];
-        OsRng.fill_bytes(&mut seed);
-        std::fs::write(dir.join("e2e_private.key"), seed).unwrap();
+        let mut ed25519_seed = [0u8; 32];
+        OsRng.fill_bytes(&mut ed25519_seed);
+        std::fs::write(dir.join("e2e_private.key"), ed25519_seed).unwrap();
+        let mut x25519_seed = [0u8; 32];
+        OsRng.fill_bytes(&mut x25519_seed);
+        std::fs::write(dir.join("x25519_private.key"), x25519_seed).unwrap();
         (E2eIdentity::load(&dir).unwrap(), dir)
     }
 

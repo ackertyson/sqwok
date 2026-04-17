@@ -377,11 +377,14 @@ fn print_help() {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     const BOLD: &str = "\x1b[1m";
     const GREEN: &str = "\x1b[1;32m";
+    const CYAN: &str = "\x1b[36m";
     const DIM: &str = "\x1b[2m";
     const R: &str = "\x1b[0m";
 
     let lines = vec![
         format!("{BOLD}sqwok{R} v{VERSION} — terminal chat app with E2E encryption"),
+        String::new(),
+        format!("Full docs: {CYAN}https://github.com/ackertyson/sqwok{R}"),
         String::new(),
         format!("{GREEN}Usage:{R}"),
         format!("  {BOLD}sqwok{R}                                    Run chat client"),

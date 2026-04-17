@@ -43,6 +43,7 @@ impl MessageStore {
             CREATE TABLE peer_keys (
                 user_uuid TEXT PRIMARY KEY,
                 ed25519_public BLOB NOT NULL,
+                x25519_public BLOB,
                 fetched_at TEXT NOT NULL
             );",
         )
@@ -56,6 +57,7 @@ impl MessageStore {
 
         let db_path = dir.join("messages.db");
         let conn = Connection::open(&db_path)?;
+        crate::storage::restrict_file_permissions(&db_path)?;
 
         conn.execute_batch(
             "
@@ -75,6 +77,7 @@ impl MessageStore {
             CREATE TABLE IF NOT EXISTS peer_keys (
                 user_uuid TEXT PRIMARY KEY,
                 ed25519_public BLOB NOT NULL,
+                x25519_public BLOB,
                 fetched_at TEXT NOT NULL
             );
         ",
@@ -85,6 +88,9 @@ impl MessageStore {
             "ALTER TABLE messages ADD COLUMN read INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        // Migration: add `x25519_public` column if this is an existing DB without it.
+        // NULL entries are treated as cache misses and re-fetched from the server.
+        let _ = conn.execute("ALTER TABLE peer_keys ADD COLUMN x25519_public BLOB", []);
 
         Ok(MessageStore { conn })
     }
@@ -140,25 +146,27 @@ impl MessageStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    pub fn get_peer_key(&self, user_uuid: &str) -> Result<Option<Vec<u8>>> {
+    /// Returns `(ed25519_public, x25519_public)` if both are cached, or `None` if either is missing.
+    pub fn get_peer_keys(&self, user_uuid: &str) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let result = self.conn.query_row(
-            "SELECT ed25519_public FROM peer_keys WHERE user_uuid = ?1",
+            "SELECT ed25519_public, x25519_public FROM peer_keys WHERE user_uuid = ?1",
             rusqlite::params![user_uuid],
-            |row| row.get::<_, Vec<u8>>(0),
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
         );
         match result {
-            Ok(bytes) => Ok(Some(bytes)),
+            Ok((ed25519, Some(x25519))) => Ok(Some((ed25519, x25519))),
+            Ok((_, None)) => Ok(None), // incomplete cache entry — treat as miss
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
 
-    pub fn store_peer_key(&self, user_uuid: &str, key_bytes: &[u8]) -> Result<()> {
+    pub fn store_peer_keys(&self, user_uuid: &str, ed25519: &[u8], x25519: &[u8]) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT OR REPLACE INTO peer_keys (user_uuid, ed25519_public, fetched_at)
-             VALUES (?1, ?2, ?3)",
-            rusqlite::params![user_uuid, key_bytes, now],
+            "INSERT OR REPLACE INTO peer_keys (user_uuid, ed25519_public, x25519_public, fetched_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![user_uuid, ed25519, x25519, now],
         )?;
         Ok(())
     }
@@ -365,25 +373,44 @@ mod tests {
     }
 
     #[test]
-    fn test_peer_key_roundtrip() {
+    fn test_peer_keys_roundtrip() {
         let store = open_mem_store();
         let user = "user-uuid-1";
-        let key = vec![0xABu8; 32];
+        let ed25519 = vec![0xABu8; 32];
+        let x25519 = vec![0xCDu8; 32];
 
-        assert!(store.get_peer_key(user).unwrap().is_none());
-        store.store_peer_key(user, &key).unwrap();
-        assert_eq!(store.get_peer_key(user).unwrap(), Some(key));
+        assert!(store.get_peer_keys(user).unwrap().is_none());
+        store.store_peer_keys(user, &ed25519, &x25519).unwrap();
+        assert_eq!(store.get_peer_keys(user).unwrap(), Some((ed25519, x25519)));
     }
 
     #[test]
-    fn test_peer_key_replace() {
+    fn test_peer_keys_replace() {
         let store = open_mem_store();
         let user = "user-uuid-1";
-        let key1 = vec![0x01u8; 32];
-        let key2 = vec![0x02u8; 32];
-        store.store_peer_key(user, &key1).unwrap();
-        store.store_peer_key(user, &key2).unwrap();
-        assert_eq!(store.get_peer_key(user).unwrap(), Some(key2));
+        let ed1 = vec![0x01u8; 32];
+        let x1 = vec![0x02u8; 32];
+        let ed2 = vec![0x03u8; 32];
+        let x2 = vec![0x04u8; 32];
+        store.store_peer_keys(user, &ed1, &x1).unwrap();
+        store.store_peer_keys(user, &ed2, &x2).unwrap();
+        assert_eq!(store.get_peer_keys(user).unwrap(), Some((ed2, x2)));
+    }
+
+    #[test]
+    fn test_peer_keys_missing_x25519_returns_none() {
+        let store = open_mem_store();
+        let user = "user-uuid-missing-x25519";
+        // Manually insert a row with NULL x25519_public (simulates old cache entry)
+        store
+            .conn
+            .execute(
+                "INSERT INTO peer_keys (user_uuid, ed25519_public, x25519_public, fetched_at)
+             VALUES (?1, ?2, NULL, ?3)",
+                rusqlite::params![user, vec![0xAAu8; 32], "2026-01-01T00:00:00Z"],
+            )
+            .unwrap();
+        assert!(store.get_peer_keys(user).unwrap().is_none());
     }
 
     #[test]

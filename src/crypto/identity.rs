@@ -1,41 +1,36 @@
 use anyhow::Result;
-use curve25519_dalek::edwards::CompressedEdwardsY;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use sha2::{Digest, Sha512};
+
 use std::path::Path;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
 
-/// Holds both the Ed25519 identity key and derived X25519 key.
+/// Holds an Ed25519 signing key and an independently-generated X25519 key.
+/// The two keys are kept fully separate: each is derived from its own random seed.
 pub struct E2eIdentity {
     signing_key: SigningKey,
     x25519_secret: StaticSecret,
 }
 
 impl E2eIdentity {
-    /// Load from the identity dir (e2e_private.key must be 32 bytes).
+    /// Load from the identity dir. Requires both `e2e_private.key` (Ed25519, 32 bytes)
+    /// and `x25519_private.key` (X25519, 32 bytes).
     pub fn load(identity_dir: &Path) -> Result<Self> {
-        let key_path = identity_dir.join("e2e_private.key");
-        let key_bytes = std::fs::read(&key_path)?;
-        if key_bytes.len() != 32 {
+        let ed25519_bytes = std::fs::read(identity_dir.join("e2e_private.key"))?;
+        if ed25519_bytes.len() != 32 {
             anyhow::bail!("e2e_private.key must be exactly 32 bytes");
         }
-        let mut seed: [u8; 32] = key_bytes.try_into().unwrap();
+        let mut seed: [u8; 32] = ed25519_bytes.try_into().unwrap();
         let signing_key = SigningKey::from_bytes(&seed);
-
-        // Derive X25519 secret from Ed25519 seed via SHA-512, matching libsodium's
-        // crypto_sign_ed25519_sk_to_curve25519.
-        let hash_output = Sha512::digest(seed);
-        let mut hash_bytes = Zeroizing::new([0u8; 64]);
-        hash_bytes.copy_from_slice(&hash_output);
-        let mut x25519_bytes: [u8; 32] = hash_bytes[..32].try_into().unwrap();
-        x25519_bytes[0] &= 248;
-        x25519_bytes[31] &= 127;
-        x25519_bytes[31] |= 64;
-        let x25519_secret = StaticSecret::from(x25519_bytes);
-
         seed.zeroize();
-        x25519_bytes.zeroize();
+
+        let x25519_bytes = std::fs::read(identity_dir.join("x25519_private.key"))?;
+        if x25519_bytes.len() != 32 {
+            anyhow::bail!("x25519_private.key must be exactly 32 bytes");
+        }
+        let mut x25519_seed: [u8; 32] = x25519_bytes.try_into().unwrap();
+        let x25519_secret = StaticSecret::from(x25519_seed);
+        x25519_seed.zeroize();
 
         Ok(E2eIdentity {
             signing_key,
@@ -55,18 +50,11 @@ impl E2eIdentity {
         self.signing_key.sign(message)
     }
 
-    /// X25519 DH with a peer's public key. Returns the 32-byte shared secret.
-    pub fn dh(&self, peer_public: &X25519PublicKey) -> [u8; 32] {
-        self.x25519_secret.diffie_hellman(peer_public).to_bytes()
+    /// X25519 DH with a peer's public key. Returns the 32-byte shared secret,
+    /// wrapped in `Zeroizing` so it is wiped from memory when dropped.
+    pub fn dh(&self, peer_public: &X25519PublicKey) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(self.x25519_secret.diffie_hellman(peer_public).to_bytes())
     }
-}
-
-/// Convert an Ed25519 public key to an X25519 public key via the birational map.
-pub fn ed25519_to_x25519_public(ed_public: &VerifyingKey) -> Option<X25519PublicKey> {
-    let compressed = CompressedEdwardsY::from_slice(ed_public.as_bytes()).ok()?;
-    let edwards_point = compressed.decompress()?;
-    let montgomery = edwards_point.to_montgomery();
-    Some(X25519PublicKey::from(montgomery.to_bytes()))
 }
 
 #[cfg(test)]
@@ -78,9 +66,15 @@ mod tests {
     fn make_test_identity() -> (E2eIdentity, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("sqwok_id_{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut seed = [0u8; 32];
-        OsRng.fill_bytes(&mut seed);
-        std::fs::write(dir.join("e2e_private.key"), seed).unwrap();
+
+        let mut ed25519_seed = [0u8; 32];
+        OsRng.fill_bytes(&mut ed25519_seed);
+        std::fs::write(dir.join("e2e_private.key"), ed25519_seed).unwrap();
+
+        let mut x25519_seed = [0u8; 32];
+        OsRng.fill_bytes(&mut x25519_seed);
+        std::fs::write(dir.join("x25519_private.key"), x25519_seed).unwrap();
+
         let identity = E2eIdentity::load(&dir).unwrap();
         (identity, dir)
     }
@@ -101,10 +95,31 @@ mod tests {
     }
 
     #[test]
-    fn test_load_wrong_size_fails() {
+    fn test_load_wrong_ed25519_size_fails() {
         let dir = std::env::temp_dir().join(format!("sqwok_id_bad_{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("e2e_private.key"), [0u8; 16]).unwrap();
+        std::fs::write(dir.join("x25519_private.key"), [0u8; 32]).unwrap();
+        assert!(E2eIdentity::load(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_wrong_x25519_size_fails() {
+        let dir = std::env::temp_dir().join(format!("sqwok_id_bad2_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("e2e_private.key"), [0u8; 32]).unwrap();
+        std::fs::write(dir.join("x25519_private.key"), [0u8; 16]).unwrap();
+        assert!(E2eIdentity::load(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_missing_x25519_fails() {
+        let dir = std::env::temp_dir().join(format!("sqwok_id_missing_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("e2e_private.key"), [0u8; 32]).unwrap();
+        // x25519_private.key intentionally absent
         assert!(E2eIdentity::load(&dir).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -154,15 +169,37 @@ mod tests {
     }
 
     #[test]
-    fn test_ed25519_to_x25519_matches_derived_key() {
-        let (id, dir) = make_test_identity();
-        let converted = ed25519_to_x25519_public(&id.verifying_key())
-            .expect("conversion must succeed for valid Ed25519 key");
+    fn test_ed25519_and_x25519_are_independent() {
+        // Verify the two keys have no deterministic relationship.
+        // With the old design, x25519_public was fully determined by the ed25519 seed.
+        // Now they are independent: same ed25519 seed, different x25519 seed → different x25519 public key.
+        let dir = std::env::temp_dir().join(format!("sqwok_id_indep_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ed_seed = [0u8; 32];
+        OsRng.fill_bytes(&mut ed_seed);
+        std::fs::write(dir.join("e2e_private.key"), ed_seed).unwrap();
+
+        let mut x_seed_a = [0u8; 32];
+        OsRng.fill_bytes(&mut x_seed_a);
+        std::fs::write(dir.join("x25519_private.key"), x_seed_a).unwrap();
+        let id_a = E2eIdentity::load(&dir).unwrap();
+
+        let mut x_seed_b = [0u8; 32];
+        OsRng.fill_bytes(&mut x_seed_b);
+        std::fs::write(dir.join("x25519_private.key"), x_seed_b).unwrap();
+        let id_b = E2eIdentity::load(&dir).unwrap();
+
+        // Same Ed25519 key
         assert_eq!(
-            converted.to_bytes(),
-            id.x25519_public().to_bytes(),
-            "birational map must produce the same X25519 public key as internal derivation"
+            id_a.verifying_key().to_bytes(),
+            id_b.verifying_key().to_bytes()
         );
+        // Different X25519 public key (with overwhelming probability)
+        assert_ne!(
+            id_a.x25519_public().to_bytes(),
+            id_b.x25519_public().to_bytes()
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

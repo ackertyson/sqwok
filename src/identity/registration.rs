@@ -297,14 +297,16 @@ async fn complete_registration(
                 user_uuid,
             )?;
 
-            let e2e_public = crate::identity::e2e_keys::generate_and_store(identity_dir)?;
+            let (ed25519_public, x25519_public) =
+                crate::identity::e2e_keys::generate_and_store(identity_dir)?;
 
             let token = crate::auth::token::build_token(identity_dir, server_url)?;
             let upload_resp = client
                 .post(format!("{}/api/e2e_key", server_url))
                 .header("Authorization", format!("Bearer {}", token))
                 .json(&serde_json::json!({
-                    "public_key": base64::engine::general_purpose::STANDARD.encode(&e2e_public)
+                    "public_key": base64::engine::general_purpose::STANDARD.encode(&ed25519_public),
+                    "x25519_public_key": base64::engine::general_purpose::STANDARD.encode(&x25519_public),
                 }))
                 .send()
                 .await?;

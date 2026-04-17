@@ -3,8 +3,6 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use crate::channel::protocol::Frame;
-use crate::net::search::SearchResult;
-
 pub enum AppEvent {
     Input(CtEvent),
     Frame(Frame),
@@ -13,10 +11,6 @@ pub enum AppEvent {
     Reconnected,
     InviteCreated(crate::net::invites::InviteInfo),
     InviteError(String),
-    SearchResults {
-        query: String,
-        results: Vec<SearchResult>,
-    },
     RedeemOk {
         chat_uuid: String,
         topic: String,
@@ -27,7 +21,8 @@ pub enum AppEvent {
     AddMemberOk {
         screenname: String,
         user_uuid: String,
-        e2e_public_key: Option<Vec<u8>>,
+        /// (ed25519_public_bytes, x25519_public_bytes) for the new member, if available.
+        e2e_keys: Option<(Vec<u8>, Vec<u8>)>,
     },
     AddMemberError(String),
     InviteList(Vec<crate::net::invites::InviteInfo>),

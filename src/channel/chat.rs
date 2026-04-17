@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::channel::protocol::Frame;
-use crate::crypto::identity::ed25519_to_x25519_public;
 use crate::crypto::{bundle_to_wire_payload, parse_key_bundle_from_wire, ChatCrypto};
 use crate::storage::messages::MessageStore;
 
@@ -204,9 +203,7 @@ impl ChatChannel {
             .to_string();
 
         let bundle = parse_key_bundle_from_wire(payload)?;
-        let sender_ed25519 = self.get_peer_ed25519(&sender_id, false)?;
-        let sender_x25519 = ed25519_to_x25519_public(&sender_ed25519)
-            .ok_or_else(|| anyhow::anyhow!("invalid sender Ed25519 key"))?;
+        let (sender_ed25519, sender_x25519) = self.get_peer_keys(&sender_id, false)?;
 
         if let Some(crypto) = &mut self.crypto {
             crypto.receive_key_bundle(&sender_x25519, &sender_ed25519, &bundle)?;
@@ -236,10 +233,7 @@ impl ChatChannel {
             None => return Ok(None),
         };
 
-        let requester_ed25519 = self.get_peer_ed25519(requester_id, true)?;
-        let requester_x25519 = ed25519_to_x25519_public(&requester_ed25519)
-            .ok_or_else(|| anyhow::anyhow!("invalid requester Ed25519 key"))?;
-
+        let (_, requester_x25519) = self.get_peer_keys(requester_id, true)?;
         let bundle = crypto.prepare_key_bundle(&requester_x25519, true)?;
         let wire_payload = bundle_to_wire_payload(&bundle, requester_id);
 
@@ -255,16 +249,26 @@ impl ChatChannel {
         Ok(())
     }
 
-    /// Fetch a peer's Ed25519 public key from local cache or server.
+    /// Fetch a peer's Ed25519 and X25519 public keys from local cache or server.
     /// Pass `force_refresh = true` when about to encrypt key material for this peer —
-    /// ensures we use their current key even if they regenerated it (e.g. account recovery).
-    pub fn get_peer_ed25519(&self, user_uuid: &str, force_refresh: bool) -> Result<VerifyingKey> {
+    /// ensures we use their current keys even if they regenerated them (e.g. account recovery).
+    pub fn get_peer_keys(
+        &self,
+        user_uuid: &str,
+        force_refresh: bool,
+    ) -> Result<(VerifyingKey, x25519_dalek::PublicKey)> {
         if !force_refresh {
-            if let Some(key_bytes) = self.store.get_peer_key(user_uuid)? {
-                let arr: [u8; 32] = key_bytes
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("cached key wrong length for {}", user_uuid))?;
-                return Ok(VerifyingKey::from_bytes(&arr)?);
+            if let Some((ed25519_bytes, x25519_bytes)) = self.store.get_peer_keys(user_uuid)? {
+                let ed_arr: [u8; 32] = ed25519_bytes.try_into().map_err(|_| {
+                    anyhow::anyhow!("cached ed25519 key wrong length for {}", user_uuid)
+                })?;
+                let x_arr: [u8; 32] = x25519_bytes.try_into().map_err(|_| {
+                    anyhow::anyhow!("cached x25519 key wrong length for {}", user_uuid)
+                })?;
+                return Ok((
+                    VerifyingKey::from_bytes(&ed_arr)?,
+                    x25519_dalek::PublicKey::from(x_arr),
+                ));
             }
         }
 
@@ -281,17 +285,29 @@ impl ChatChannel {
                 .map_err(|e| anyhow::anyhow!("JSON parse failed: {}", e))
         })?;
 
-        let key_b64 = resp["e2e_public_key"]
+        let ed25519_b64 = resp["e2e_public_key"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("no e2e key for user {}", user_uuid))?;
-        let key_bytes = base64::engine::general_purpose::STANDARD.decode(key_b64)?;
+            .ok_or_else(|| anyhow::anyhow!("no ed25519 key for user {}", user_uuid))?;
+        let x25519_b64 = resp["x25519_public_key"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("no x25519 key for user {}", user_uuid))?;
 
-        self.store.store_peer_key(user_uuid, &key_bytes)?;
+        let ed25519_bytes = base64::engine::general_purpose::STANDARD.decode(ed25519_b64)?;
+        let x25519_bytes = base64::engine::general_purpose::STANDARD.decode(x25519_b64)?;
 
-        let arr: [u8; 32] = key_bytes
+        self.store
+            .store_peer_keys(user_uuid, &ed25519_bytes, &x25519_bytes)?;
+
+        let ed_arr: [u8; 32] = ed25519_bytes
             .try_into()
-            .map_err(|_| anyhow::anyhow!("server key wrong length for {}", user_uuid))?;
-        Ok(VerifyingKey::from_bytes(&arr)?)
+            .map_err(|_| anyhow::anyhow!("server ed25519 key wrong length for {}", user_uuid))?;
+        let x_arr: [u8; 32] = x25519_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("server x25519 key wrong length for {}", user_uuid))?;
+        Ok((
+            VerifyingKey::from_bytes(&ed_arr)?,
+            x25519_dalek::PublicKey::from(x_arr),
+        ))
     }
 }
 
@@ -306,11 +322,13 @@ mod tests {
     fn make_test_channel() -> ChatChannel {
         use std::env;
 
-        // Write a test Ed25519 key to a temp dir.
+        // Write independent Ed25519 and X25519 keys to a temp dir.
         let dir = env::temp_dir().join(format!("sqwok-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
         std::fs::write(dir.join("e2e_private.key"), signing_key.to_bytes()).unwrap();
+        let x25519_secret = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+        std::fs::write(dir.join("x25519_private.key"), x25519_secret.as_bytes()).unwrap();
 
         let chat_dir = env::temp_dir().join(format!("sqwok-chat-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&chat_dir).unwrap();
@@ -447,6 +465,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
         std::fs::write(dir.join("e2e_private.key"), signing_key.to_bytes()).unwrap();
+        let x25519_secret = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+        std::fs::write(dir.join("x25519_private.key"), x25519_secret.as_bytes()).unwrap();
         let chat_dir = std::env::temp_dir().join(format!("sqwok-seg-chat-{}", user_uuid));
         std::fs::create_dir_all(&chat_dir).unwrap();
         let crypto = crate::crypto::ChatCrypto::create_new(&dir, &chat_dir).unwrap();
@@ -490,6 +510,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
         std::fs::write(dir.join("e2e_private.key"), signing_key.to_bytes()).unwrap();
+        let x25519_secret = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+        std::fs::write(dir.join("x25519_private.key"), x25519_secret.as_bytes()).unwrap();
         let chat_dir = std::env::temp_dir().join(format!("sqwok-qchat-{}", user_uuid));
         std::fs::create_dir_all(&chat_dir).unwrap();
         let crypto = crate::crypto::ChatCrypto::create_new(&dir, &chat_dir).unwrap();
@@ -541,6 +563,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
         std::fs::write(dir.join("e2e_private.key"), signing_key.to_bytes()).unwrap();
+        let x25519_secret = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+        std::fs::write(dir.join("x25519_private.key"), x25519_secret.as_bytes()).unwrap();
         let chat_dir = std::env::temp_dir().join(format!("sqwok-gapchat-{}", user_uuid));
         std::fs::create_dir_all(&chat_dir).unwrap();
         let crypto = crate::crypto::ChatCrypto::create_new(&dir, &chat_dir).unwrap();

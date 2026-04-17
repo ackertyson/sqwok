@@ -1105,16 +1105,9 @@ impl AppState {
                 continue;
             }
             // Fetch peer Ed25519 key from local cache or server
-            let peer_ed25519 = match chat.get_peer_ed25519(&member.uuid, true) {
+            let (_, peer_x25519) = match chat.get_peer_keys(&member.uuid, true) {
                 Ok(k) => k,
-                Err(_) => {
-                    continue;
-                }
-            };
-            let peer_x25519 = match crate::crypto::identity::ed25519_to_x25519_public(&peer_ed25519)
-            {
-                Some(k) => k,
-                None => continue,
+                Err(_) => continue,
             };
 
             if let Some(ref crypto) = chat.crypto {
@@ -1796,19 +1789,12 @@ impl AppState {
             if let Some(ref chat) = self.chat_channel {
                 if chat.crypto.is_some() {
                     for uuid in &new_joins {
-                        if let Ok(peer_ed25519) = chat.get_peer_ed25519(uuid, true) {
-                            if let Some(peer_x25519) =
-                                crate::crypto::identity::ed25519_to_x25519_public(&peer_ed25519)
-                            {
-                                if let Some(ref crypto) = chat.crypto {
-                                    if let Ok(bundle) =
-                                        crypto.prepare_key_bundle(&peer_x25519, true)
-                                    {
-                                        let wire =
-                                            crate::crypto::bundle_to_wire_payload(&bundle, uuid);
-                                        let frame = chat.frame("key:distribute", wire);
-                                        let _ = self.ws_tx.send(frame.encode());
-                                    }
+                        if let Ok((_, peer_x25519)) = chat.get_peer_keys(uuid, true) {
+                            if let Some(ref crypto) = chat.crypto {
+                                if let Ok(bundle) = crypto.prepare_key_bundle(&peer_x25519, true) {
+                                    let wire = crate::crypto::bundle_to_wire_payload(&bundle, uuid);
+                                    let frame = chat.frame("key:distribute", wire);
+                                    let _ = self.ws_tx.send(frame.encode());
                                 }
                             }
                         }
