@@ -8,6 +8,7 @@ mod storage;
 mod tui;
 
 use anyhow::Result;
+use base64::Engine as _;
 use tokio::sync::mpsc;
 
 use tui::app::{AppState, ChatSummary, Invitation};
@@ -83,9 +84,13 @@ async fn main() -> Result<()> {
         identity::registration::run_registration(&server_url, &identity_dir).await?;
     }
 
-    // Generate E2E encryption keys if missing (e.g. users registered before E2E was added)
+    // Require local E2E keys — no silent generation. Registration and account
+    // recovery are the only paths that create them (and upload them to the server).
     if !identity_dir.join("e2e_private.key").exists() {
-        identity::e2e_keys::generate_and_store(&identity_dir)?;
+        anyhow::bail!(
+            "E2E encryption keys not found. \
+             Please re-register or recover your account to set up your identity."
+        );
     }
 
     // Read our user UUID and screenname
@@ -99,6 +104,11 @@ async fn main() -> Result<()> {
 
     // Build HTTP client (reused throughout)
     let http = reqwest::Client::new();
+
+    // Verify our public key is registered on the server; upload if missing or stale.
+    // Runs before the WebSocket connects so peers can always verify our signatures.
+    // Self-healing: catches failed uploads from registration, DB restores, or key rotation.
+    ensure_e2e_key_registered(&identity_dir, &server_url, &user_uuid_str, &http).await;
 
     // Channel for sending frames out over WS
     let (ws_out_tx, ws_out_rx) = mpsc::unbounded_channel::<String>();
@@ -254,6 +264,96 @@ async fn main() -> Result<()> {
     tui_instance.restore()?;
 
     result
+}
+
+/// Verify our E2E public key is registered on the server and upload it if not.
+///
+/// Compares our local public key against what the server has stored. Uploads when
+/// the server returns 404 (key was never uploaded) or when the keys don't match
+/// (e.g. account recovery generated new keys but a previous upload failed).
+///
+/// Runs before the WebSocket connects so peers never see us online without being
+/// able to fetch our public key. Failures are soft warnings — a transient network
+/// issue shouldn't block the app, and the check will succeed on the next startup.
+async fn ensure_e2e_key_registered(
+    identity_dir: &std::path::Path,
+    server_url: &str,
+    user_uuid: &str,
+    http: &reqwest::Client,
+) {
+    let (local_ed, local_x) = match identity::e2e_keys::load_public_keys(identity_dir) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("Warning: could not load local E2E keys: {}", e);
+            return;
+        }
+    };
+
+    let token = match auth::token::build_token(identity_dir, server_url) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "Warning: could not build auth token for E2E key check: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let server_resp = http
+        .get(format!("{}/api/users/{}/e2e_key", server_url, user_uuid))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await;
+
+    let needs_upload = match server_resp {
+        Err(e) => {
+            eprintln!("Warning: could not verify E2E key registration: {}", e);
+            return;
+        }
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+            let server_ed = body["e2e_public_key"]
+                .as_str()
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok());
+            let server_x = body["x25519_public_key"]
+                .as_str()
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok());
+            server_ed.as_deref() != Some(local_ed.as_slice())
+                || server_x.as_deref() != Some(local_x.as_slice())
+        }
+        Ok(_) => true, // 404 or other non-success: server doesn't have our key
+    };
+
+    if !needs_upload {
+        return;
+    }
+
+    let token = match auth::token::build_token(identity_dir, server_url) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "Warning: could not build auth token for E2E key upload: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    match http
+        .post(format!("{}/api/e2e_key", server_url))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({
+            "public_key": base64::engine::general_purpose::STANDARD.encode(&local_ed),
+            "x25519_public_key": base64::engine::general_purpose::STANDARD.encode(&local_x),
+        }))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {}
+        Ok(r) => eprintln!("Warning: E2E key upload failed: {}", r.status()),
+        Err(e) => eprintln!("Warning: E2E key upload failed: {}", e),
+    }
 }
 
 async fn fetch_chat_list(
