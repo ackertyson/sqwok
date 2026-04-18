@@ -46,18 +46,24 @@ cargo install --path .
 
 ## Onboarding
 
+You'll need an invite code from someone, then you can do:
+
+```shell
+sqwok join MY_INVITE_CODE
+```
+
 On first launch the client walks you through registration:
 
 1. Enter your email and screenname
 2. Check your email and click the verification link
-3. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.) and enter the 6-digit TOTP code _(you will need this same authenticator app registration if you ever need to recover your account later!)_
+3. Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.) and enter the 6-digit TOTP code _(you will need this same authenticator app if you ever need to recover your account later!)_
 4. The client generates a keypair and gets a cert signed by the server's CA
 
 Credentials are stored in `~/.sqwok/identity/`
 
 *NOTE: You are encouraged to configure your OS to use a time server — clock drift is a common source of registration failure.*
 
-## Keyboard navigation
+## Keyboard setup
 
 Mac users may need to configure your terminal to treat `option` key as `Alt`. ITerm2 may work best if you set your option key(s) to send `Esc+`
 
