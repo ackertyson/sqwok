@@ -21,11 +21,61 @@ docker-compose up              # Run via Docker
 
 CLI usage: `sqwok` (interactive), `sqwok new "Topic" [--description "Desc"]` (create chat), `sqwok join CODE-1234` (join via invite). Global flags: `--server <URL>`, `--identity <DIR>`.
 
-## Core principles
+## Core Principles
 
-1. self reliance: prefer self-rolled implementations over 3rd-party solutions
-2. simplicity: don't reach for complex solutions when a succinct approach will do the job *unless the additional complexity adds real value*
-3. UX is king: our UI should be snappy, elegant, intuitive and powerful
+1. **Self-reliance**: prefer self-rolled implementations over 3rd-party solutions.
+2. **Simplicity**: don't reach for complex solutions when a succinct approach will do the job *unless the additional complexity adds real value*.
+3. **UX is king**: our UI should be snappy, elegant, intuitive and powerful.
+
+## Design Philosophy
+
+**TUI is the identity.** The terminal client is the product — sqwok isn't competing with Slack/Teams/Discord GUI apps and isn't trying to. Building a new kind of TUI chat app was the founding impetus.
+
+**Message sovereignty.** The server never decodes or stores message content. Chat history lives entirely on client devices. When a message is sent, the server assigns it a sequence number and relays it to online peers, but keeps no copy. This is core to the entire app design — there is no central message DB.
+
+**Scale ambition.** Threading + independent pane views are designed so the chat UX can scale from 2 users to 200,000.
+
+## Security Model
+
+sqwok is **secure but not anonymous**. The server cannot read message content — that's guaranteed by E2E encryption. What it *can* see is metadata: who is in a group, who sent each message, and when. The E2E posture is philosophical (protecting user communication content as a principle), not aimed at a specific adversary.
+
+The crypto stack was designed by an LLM with the owner's guidance. Contributors are encouraged to scrutinize it.
+
+### Authentication
+
+RSA keypair + server-signed X.509 certificate. The server acts as a CA — during registration, the client generates an RSA keypair, sends a CSR, and receives back a signed cert with the user's UUID as the CN. Every WebSocket connection authenticates via a short-lived token: `base64url(timestamp|host).base64url(RSA_signature).base64url(cert_PEM)`, 30s TTL. The server validates the cert chain, checks signature freshness, rejects replays, and verifies the cert serial matches the user's current cert (so old/rotated certs are rejected).
+
+### E2E Encryption
+
+Two independent key pairs per user (separate random seeds, not derived from each other):
+- **Ed25519** (`e2e_private.key`) — signing key bundles during key exchange
+- **X25519** (`x25519_private.key`) — Diffie-Hellman for encrypting key bundles per-recipient
+
+**Message encryption**: AES-256-GCM with epoch-based group keys. Wire format: `[epoch:4B LE][nonce:12B][ciphertext+GCM_tag]`. AAD binds both the epoch and sender UUID, preventing epoch-swap and sender-spoofing attacks.
+
+**Group key management**: `KeyChain` holds all epoch keys for a chat. The group creator generates epoch 0. Key rotation (new epoch with fresh random key) happens on member removal. Old epoch keys are retained so historical messages remain decryptable.
+
+**Key exchange**: Epoch keys are encrypted per-recipient using X25519 DH shared secrets, wrapped with HKDF-SHA256 (salt = sorted concatenation of both public keys, info = `sqwok-key-wrap-v1`), then AES-256-GCM with epoch number as AAD. The entire bundle is Ed25519-signed by the sender. On the receiving end, signature is verified before any decryption.
+
+**Key buffering**: When keys are distributed to an offline recipient, the server buffers the encrypted bundle (ETS-backed, 30-day TTL, most-recent-only since each bundle contains the full epoch chain) and delivers it on reconnect.
+
+### Account Recovery
+
+When a user loses `~/.sqwok/identity/`, they re-register with the same email + existing TOTP code (do *not* re-scan QR). The server issues a new cert with the original UUID and disconnects old sessions. On rejoining a chat, online peers automatically re-distribute encryption keys and sync message history. Recovery completeness depends on what peers still have locally.
+
+## Peer Sync Protocol
+
+Since the server stores no messages, clients sync history peer-to-peer. The protocol is server-coordinated (the server tracks sequence numbers and online presence) but message content flows directly between peers as encrypted blobs.
+
+**Two-phase sync** (on join/reconnect):
+1. **Probe**: Client sends `sync:catchup` with its known segments. Server computes missing ranges against `global_seq`, broadcasts `sync:query` to online peers asking what they have.
+2. **Assign**: Peers respond with `sync:offer` (their local segment ranges). Server assigns non-overlapping ranges across peers that actually hold the needed data, sends `sync:assign` to each. Peers then `sync:push` the messages.
+
+**Scrollback**: `sync:scrollback` requests older history (before the client's earliest known seq) using the same two-phase probe-and-assign mechanism.
+
+**Orphan recovery**: If an assigned peer disconnects mid-sync, the server detects this via presence_diff and reassigns their ranges to remaining peers.
+
+**Trust model**: Synced messages are encrypted blobs — the server never sees plaintext. Peers trust each other's sequence claims. There is no signature verification on synced messages beyond what AES-256-GCM provides (the message will fail to decrypt if the key/epoch/sender doesn't match).
 
 ## Architecture
 
@@ -40,60 +90,38 @@ Each event mutates `AppState` (`tui/app.rs`, the central state object) and optio
 
 ### Module Responsibilities
 
-- **`auth/`** — RSA-signed token generation for WebSocket authentication. Token format: `base64(message).base64(signature).base64(cert)`, 30s TTL.
-- **`channel/`** — Phoenix WebSocket protocol. `protocol.rs` handles JSON frame encoding/decoding. `chat.rs` manages per-chat state and message sending.
-- **`crypto/`** — E2E encryption stack:
-  - Ed25519 signing + X25519 key exchange (derived from same seed)
-  - AES-256-GCM message encryption with wire format: `[epoch:4B][nonce:12B][ciphertext+tag]`
-  - Epoch-based group key management (`KeyChain`) with HKDF key derivation
-  - Key bundles encrypted per-recipient via X25519 DH
-- **`identity/`** — Registration flow: email verification → TOTP setup → RSA keypair → server-signed X.509 cert. Account recovery follows the same TOTP-gated path.
-- **`net/`** — WebSocket client with exponential backoff reconnection (1s→60s max), 30s heartbeat. Also HTTP endpoints for invites and user search.
+- **`auth/`** — RSA-signed token generation for WebSocket authentication.
+- **`channel/`** — Phoenix WebSocket protocol. `protocol.rs` handles JSON frame encoding/decoding. `chat.rs` manages per-chat state and message sending. `sync.rs` builds `sync:push` response frames for peer-to-peer message history sync.
+- **`config.rs`** — Path helpers (`identity_dir`, `server_url`, `chat_dir`, `home_dir`). Handles migration from old platform-specific data dirs.
+- **`crypto/`** — E2E encryption stack. See Security Model above.
+- **`identity/`** — Registration flow: email verification → TOTP setup → RSA keypair + E2E keypairs → server-signed X.509 cert. Account recovery follows the same TOTP-gated path.
+- **`net/`** — WebSocket client (`ws.rs`) with exponential backoff reconnection (1s→60s max), 30s WS-level ping/pong (10s pong timeout). HTTP endpoints for invites and user search. Phoenix-level heartbeat is sent from `main.rs`.
 - **`storage/`** — SQLite persistence. Per-chat message DB at `~/.sqwok/chats/{uuid}/messages.db`. Global contact cache at `~/.sqwok/contacts.db`.
 - **`tui/`** — Ratatui-based terminal UI. See TUI section below.
 
 ### TUI Structure
 
-- **`app.rs`** (~1800 lines) — `AppState`: central state object, all inbound event handlers, business logic (send, navigate, expand/collapse threads, key exchange, etc.).
-- **`input.rs`** — Keyboard dispatch. Routes `crossterm` key events to `AppState` methods based on current mode/context (chat vs picker, editing vs navigating, modal active, etc.).
-- **`render.rs`** — Top-level frame layout: splits the terminal into top bar, pane area, bottom bar; handles multi-pane borders; dispatches to view components.
-- **`render_rows.rs`** — Builds the flat `Vec<RenderRow>` for a pane. `RenderRow` is the core display abstraction: a depth-aware enum (`Message`, `CollapsedThread`, `Input`, `TypingIndicator`) with an `indent: u8` field that drives visual nesting. All collapsed-group unread/mention status flows through `TuiMessageStore::unread_status`.
-- **`pane.rs`** — `Pane` struct (per-pane viewport state: selection, editing target, input buffers, expanded/collapsed sets). `InputTarget` enum (`MainChat`, `Thread(uuid)`, `Reply(reply_uuid, thread_uuid)`) with methods for converting to/from row fields.
-- **`store.rs`** — `TuiMessageStore`: in-memory display store. Holds `top_level` order, `by_uuid` map, and `threads` map. `unread_status(uuids)` is the single source of truth for collapsed-group unread status. Note: `mentions_me` on `RenderRow` is **not** read-gated — it reflects raw mention status from the store. Visual read-gating (`is_unread && mentions_me`) is applied in `views/chat.rs`.
-- **`mention.rs`** — `@mention` parsing: `mentions_user`, `render_body` (wire tags → `@name`), `split_body_spans` (inline highlight segments), autocomplete query extraction.
+- **`app.rs`** — `AppState`: central state object, all inbound event handlers, business logic.
+- **`input.rs`** — Keyboard dispatch by mode/context.
+- **`render.rs`** — Top-level frame layout and pane borders.
+- **`render_rows.rs`** — Converts message store into flat `Vec<RenderRow>` for rendering. `RenderRow` is depth-aware (indent 0/1/2 for message/thread/sub-reply).
+- **`pane.rs`** — Per-pane viewport state. `InputTarget` enum encodes which input field is active.
+- **`store.rs`** — `TuiMessageStore`: in-memory message index with unread/mention tracking.
+- **`mention.rs`** — `@mention` parsing and rendering.
 - **`style.rs`** — Color palette. All colors go through functions here; never hardcode colors elsewhere.
-- **`views/`** — Individual view components: `block_users` (block/unblock peer modal), `chat` (message list, top/bottom bars), `chat_picker`, `command_bar`, `contacts`, `error_toast`, `group_settings`, `invite`, `member_list`, `modal`, `search`.
+- **`views/`** — Individual view components.
+
+### Key TUI Invariants
+
+- All depth levels share `RenderRow::Message` / `RenderRow::Input`, differentiated only by `indent`. Adding a depth level means: push rows with the right indent, call `push_depth_footer`, extend `build_indent`/`indent_width` in `views/chat.rs`.
+- `mentions_me` on `RenderRow` reflects raw mention status (aggregated over collapsed sub-replies). Visual read-gating (`is_unread && mentions_me`) is applied in `views/chat.rs`.
+- `Alt+m` and `Alt+n` both use the `jump_to_matching` helper in `app.rs`.
+- Blocking is local-only — no server notification. First attempt, not battle-tested.
+- Thread depth (3 levels) is an open design question without empirical data yet.
 
 ### State Modes
 
-`AppState` operates in two modes: `ChatPicker` (chat list) and `Chat` (active conversation). Modals (`MemberList`, `GroupSettings`, `InviteCreate`, `Search`, `Contacts`, `BlockUsers`) overlay on top. `Chat` mode supports multiple simultaneous panes (vertical or horizontal split) via `Vec<Pane>` with an `active_pane` index.
-
-### Block Users
-
-Blocking is local-only and persists across sessions in a `blocked_users` table in `~/.sqwok/contacts.db`. `AppState.blocked_uuids: HashSet<String>` is loaded at startup. Blocked peers are suppressed everywhere: their messages and entire threads are hidden in `render_rows::build()`, they are excluded from the member list, peer counts, and `@mention` autocomplete. The `/block` command (short: `bl`) opens the `BlockUsers` modal — a two-section UI (search on top, blocked list below). If a message is selected when `/block` is invoked, the sender is preselected in search. Block/unblock both require a y/n confirmation prompt.
-
-### Render Row Model
-
-`render_rows::build()` converts the message store into a flat list for rendering. The key design principle: all depth levels share the same `RenderRow::Message` / `RenderRow::Input` variants, differentiated only by `indent` (0 = top-level, 1 = thread reply, 2 = sub-reply). Adding a new depth level requires only: pushing messages with the appropriate `indent`, calling `push_depth_footer` with the right `InputTarget`, and extending `build_indent`/`indent_width` in `views/chat.rs`.
-
-`InputTarget` encodes which input field is active and can derive its own wire UUIDs (`to_wire_uuids`), indent depth (`indent`), and row-matching predicate (`matches_input_row`).
-
-### Navigation Shortcuts (Chat mode, non-editing)
-
-| Key | Action |
-|-----|--------|
-| `Alt+m` | Jump to next `@mention`, cycling; expands collapsed threads to land on the message |
-| `Alt+n` | Jump to next unread message, cycling; expands collapsed threads to land on the message |
-| `Alt+\` | Split pane vertically |
-| `Alt+-` | Split pane horizontally |
-| `Alt+w` | Close active pane |
-| `Alt+←/→` | Focus previous/next pane |
-
-Both `Alt+m` and `Alt+n` share the `jump_to_matching` helper in `app.rs`.
-
-### Phoenix Channel Protocol
-
-Server communication uses Phoenix channel frames: `{"topic", "event", "ref", "join_ref", "payload"}`. Key inbound events: `msg:new`, `msg:buffered`, `member_list`, `presence_state`, `presence_diff`, `member:removed`, `key:request`, `key:distribute`, `typing:active`, `sync:push`, `sync:assign`, `sync:query`, `chat:added`, `chat:removed`.
+`AppState` operates in two modes: `ChatPicker` (chat list) and `Chat` (active conversation). Modals overlay on top. `Chat` mode supports multiple simultaneous panes (vertical or horizontal split) via `Vec<Pane>` with an `active_pane` index.
 
 ## Environment Variables
 
@@ -101,21 +129,24 @@ Server communication uses Phoenix channel frames: `{"topic", "event", "ref", "jo
 
 ## File Paths at Runtime
 
-All identity and credential files are co-located under `~/.sqwok/identity/`:
+Identity files under `~/.sqwok/identity/`:
 - `private_key.pem` — RSA private key (auth)
-- `cert.pem`, `ca.pem` — Server-signed X.509 cert (auth)
+- `cert.pem`, `ca.pem` — Server-signed X.509 cert and CA cert (auth)
 - `user_uuid` — Registered user UUID
 - `screenname` — Display name
-- `e2e_private.key` — Ed25519 private key (E2E encryption)
+- `e2e_private.key` — Ed25519 signing key (32-byte seed)
+- `x25519_private.key` — X25519 DH key (32-byte seed, independent from Ed25519)
 
-Other paths:
-- `~/.sqwok/chats/{uuid}/messages.db` — Per-chat SQLite message store
-- `~/.sqwok/contacts.db` — Contact/screenname cache
-- `~/.sqwok/debug.log` — Debug output (written by `dlog!` macro)
+Per-chat data under `~/.sqwok/chats/{uuid}/`:
+- `messages.db` — SQLite message store
+- `keychain.bin` — Epoch keys, binary format: `[epoch:4B LE][key:32B]` repeated, file mode 0o600
+
+Other:
+- `~/.sqwok/contacts.db` — Contact/screenname cache + blocked users table
 
 ## Patterns
 
 - Long-running operations (HTTP calls, key exchange) are spawned as tokio tasks that send results back via `AppEvent`
 - MPSC channels connect the WebSocket reader/writer to the app
 - `anyhow::Result` used throughout for error handling
-- Tests are inline `#[cfg(test)]` modules (primarily in `crypto/identity.rs` and `channel/protocol.rs`)
+- Tests are inline `#[cfg(test)]` modules spread across the codebase
