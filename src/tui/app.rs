@@ -48,7 +48,9 @@ pub struct Invitation {
 pub struct InviteModalState {
     pub step: InviteStep,
     pub ttl_selection: usize,
-    pub use_limit: Option<u32>,
+    /// Index into `views::invite::USE_LIMIT_OPTIONS`.
+    pub use_limit_idx: usize,
+    pub configure_focus: ConfigureFocus,
     pub created_code: Option<String>,
     pub error: Option<String>,
     pub active_invites: Vec<crate::net::invites::InviteInfo>,
@@ -67,12 +69,19 @@ pub enum InviteStep {
     Display,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigureFocus {
+    Ttl,
+    UseLimit,
+}
+
 impl InviteModalState {
     pub fn new() -> Self {
         InviteModalState {
             step: InviteStep::Configure,
             ttl_selection: 1, // default to 24h
-            use_limit: None,
+            use_limit_idx: 0, // default to unlimited
+            configure_focus: ConfigureFocus::Ttl,
             created_code: None,
             error: None,
             active_invites: Vec::new(),

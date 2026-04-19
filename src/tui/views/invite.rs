@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::tui::{
-    app::{InviteModalState, InviteStep},
+    app::{ConfigureFocus, InviteModalState, InviteStep},
     style as s,
 };
 
@@ -15,6 +15,29 @@ use super::modal::draw_modal_frame;
 
 pub const TTL_OPTIONS: [(&str, &str); 3] =
     [("1h", "1 hour"), ("24h", "24 hours"), ("7d", "7 days")];
+
+pub const USE_LIMIT_OPTIONS: [Option<u32>; 7] = [
+    None,
+    Some(1),
+    Some(2),
+    Some(5),
+    Some(10),
+    Some(25),
+    Some(50),
+];
+
+fn use_limit_label(opt: Option<u32>) -> &'static str {
+    match opt {
+        None => "Unlimited",
+        Some(1) => "1 use",
+        Some(2) => "2 uses",
+        Some(5) => "5 uses",
+        Some(10) => "10 uses",
+        Some(25) => "25 uses",
+        Some(50) => "50 uses",
+        _ => "Custom",
+    }
+}
 
 pub fn draw(frame: &mut Frame, state: &InviteModalState) {
     draw_modal_frame(frame, "Create Invite Code", |frame, area| {
@@ -30,61 +53,100 @@ fn draw_configure(frame: &mut Frame, area: ratatui::layout::Rect, state: &Invite
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(1),
+            Constraint::Length(1), // error
+            Constraint::Length(1), // "Expires after:" label
+            Constraint::Length(3), // TTL options
+            Constraint::Length(1), // spacer
+            Constraint::Length(1), // "Use limit:" label
+            Constraint::Length(1), // use limit value
+            Constraint::Min(0),    // flexible spacer
+            Constraint::Length(1), // key hints
         ])
         .split(area);
 
+    // Error row
+    if let Some(ref err) = state.error {
+        frame.render_widget(
+            Paragraph::new(err.as_str()).style(Style::default().fg(s::error_color())),
+            chunks[0],
+        );
+    }
+
+    // TTL section
+    let ttl_focused = state.configure_focus == ConfigureFocus::Ttl;
+    let section_style = if ttl_focused {
+        Style::default().fg(s::fg())
+    } else {
+        Style::default().fg(s::dim())
+    };
     frame.render_widget(
-        Paragraph::new("Expires after:").style(Style::default().fg(s::dim())),
-        chunks[0],
+        Paragraph::new("Expires after:").style(section_style),
+        chunks[1],
     );
 
     let ttl_lines: Vec<Line> = TTL_OPTIONS
         .iter()
         .enumerate()
         .map(|(i, (_, label))| {
-            let marker = if i == state.ttl_selection {
+            let selected = i == state.ttl_selection;
+            let marker = if selected && ttl_focused {
                 "► "
             } else {
                 "  "
             };
-            let style = if i == state.ttl_selection {
+            let style = if selected && ttl_focused {
                 Style::default()
                     .fg(s::accent())
                     .add_modifier(Modifier::BOLD)
-            } else {
+            } else if selected {
                 Style::default().fg(s::fg())
+            } else {
+                Style::default().fg(s::dim())
             };
             Line::from(Span::styled(format!("{}{}", marker, label), style))
         })
         .collect();
-
     frame.render_widget(Paragraph::new(ttl_lines), chunks[2]);
 
-    let limit_label = match state.use_limit {
-        None => "Use limit: unlimited".to_string(),
-        Some(n) => format!("Use limit: {} use(s)", n),
+    // Use limit section
+    let ul_focused = state.configure_focus == ConfigureFocus::UseLimit;
+    let ul_section_style = if ul_focused {
+        Style::default().fg(s::fg())
+    } else {
+        Style::default().fg(s::dim())
     };
     frame.render_widget(
-        Paragraph::new(limit_label).style(Style::default().fg(s::dim())),
-        chunks[3],
-    );
-
-    frame.render_widget(
-        Paragraph::new("↑↓ select TTL   Enter create   Esc cancel")
-            .style(Style::default().fg(s::dim()))
-            .alignment(Alignment::Center),
+        Paragraph::new("Use limit:").style(ul_section_style),
         chunks[4],
     );
 
-    if let Some(ref err) = state.error {
-        let err_line = Paragraph::new(err.as_str()).style(Style::default().fg(s::error_color()));
-        frame.render_widget(err_line, chunks[1]);
-    }
+    let current = USE_LIMIT_OPTIONS[state.use_limit_idx];
+    let label = use_limit_label(current);
+    let ul_value_line = if ul_focused {
+        Line::from(vec![
+            Span::styled("► ", Style::default().fg(s::accent())),
+            Span::styled(
+                label,
+                Style::default()
+                    .fg(s::accent())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])
+    } else {
+        Line::from(Span::styled(
+            format!("  {}", label),
+            Style::default().fg(s::dim()),
+        ))
+    };
+    frame.render_widget(Paragraph::new(ul_value_line), chunks[5]);
+
+    // Key hints
+    frame.render_widget(
+        Paragraph::new("↑↓ select   Tab switch field   Enter create   Esc cancel")
+            .style(Style::default().fg(s::dim()))
+            .alignment(Alignment::Center),
+        chunks[7],
+    );
 }
 
 fn draw_creating(frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -181,12 +243,34 @@ pub fn handle_input(key: crossterm::event::KeyEvent, state: &mut InviteModalStat
 
     match state.step {
         InviteStep::Configure => match key.code {
+            KeyCode::Tab => {
+                state.configure_focus = match state.configure_focus {
+                    ConfigureFocus::Ttl => ConfigureFocus::UseLimit,
+                    ConfigureFocus::UseLimit => ConfigureFocus::Ttl,
+                };
+                false
+            }
             KeyCode::Up => {
-                state.ttl_selection = state.ttl_selection.saturating_sub(1);
+                match state.configure_focus {
+                    ConfigureFocus::Ttl => {
+                        state.ttl_selection = state.ttl_selection.saturating_sub(1);
+                    }
+                    ConfigureFocus::UseLimit => {
+                        state.use_limit_idx = state.use_limit_idx.saturating_sub(1);
+                    }
+                }
                 false
             }
             KeyCode::Down => {
-                state.ttl_selection = (state.ttl_selection + 1).min(TTL_OPTIONS.len() - 1);
+                match state.configure_focus {
+                    ConfigureFocus::Ttl => {
+                        state.ttl_selection = (state.ttl_selection + 1).min(TTL_OPTIONS.len() - 1);
+                    }
+                    ConfigureFocus::UseLimit => {
+                        state.use_limit_idx =
+                            (state.use_limit_idx + 1).min(USE_LIMIT_OPTIONS.len() - 1);
+                    }
+                }
                 false
             }
             KeyCode::Enter => {

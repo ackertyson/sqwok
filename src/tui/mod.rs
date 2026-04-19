@@ -264,7 +264,8 @@ fn maybe_spawn_invite_create(
         let ttl = views::invite::TTL_OPTIONS[modal.ttl_selection]
             .0
             .to_string();
-        (ttl, modal.use_limit)
+        let use_limit = views::invite::USE_LIMIT_OPTIONS[modal.use_limit_idx];
+        (ttl, use_limit)
     } else {
         return;
     };
